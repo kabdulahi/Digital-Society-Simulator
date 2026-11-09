@@ -1,0 +1,18 @@
+{
+  "connectors": ["hoewel", "aangezien", "daarentegen", "desondanks", "bijgevolg", "voor zover"],
+  "subordinators": ["omdat", "hoewel", "aangezien", "mits", "dat", "als"],
+  "coordination": ["en", "maar", "daarentegen"],
+  "modals": ["kan", "kunnen", "moet", "moeten", "zou", "zouden"],
+  "templates": [
+    "{connector_cap} {subject} {object} {finite} en de situatie {adverb} beoordeelt, stelt {subject} dat de samenwerking {modal} verbeteren, mits de betrokkenen de gevolgen van hun keuzes expliciet wegen.",
+    "{subject_cap} erkent dat {object} {evaluation}, hoewel de betrokkenen daarover nog geen overeenstemming hebben bereikt.",
+    "In het licht van {object} acht {subject} het noodzakelijk dat de organisatie haar verantwoordelijkheid expliciet onderbouwt.",
+    "{subject_cap} benadrukt dat niet alleen de directe gevolgen, maar ook de institutionele neveneffecten zorgvuldig moeten worden meegewogen.",
+    "Zonder {object} structureel te evalueren, blijft het moeilijk vast te stellen of de gekozen aanpak maatschappelijk houdbaar is.",
+    "{subject_cap} stelt voor om de beschikbare middelen geleidelijk te herverdelen, op voorwaarde dat de legitimiteit transparant wordt bewaakt.",
+    "Hoewel de eerste signalen positief zijn, waarschuwt {subject} ervoor dat de kwetsbaarheid van het systeem niet mag worden onderschat.",
+    "De vraag is niet alleen of de maatregel uitvoerbaar is, maar ook in hoeverre zij het onderlinge vertrouwen op langere termijn versterkt.",
+    "{subject_cap} concludeert voorlopig dat de uitkomst verdedigbaar is, zolang afwijkende perspectieven in de besluitvorming zichtbaar blijven.",
+    "Daarom pleit {subject} voor een aanpak waarin analyse, terugkoppeling en institutionele verantwoording elkaar voortdurend aanvullen."
+  ]
+}

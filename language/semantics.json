@@ -1,0 +1,7 @@
+{
+  "roles": ["agent", "experiencer", "theme", "recipient", "cause", "consequence"],
+  "domains": ["vertrouwen", "beleid", "middelen", "legitimiteit", "stress", "samenwerking"],
+  "speech_acts": ["informeren", "beoordelen", "waarschuwen", "voorstellen", "nuanceren", "instemmen"],
+  "uncertainty": ["zeker", "waarschijnlijk", "mogelijk", "vooralsnog"],
+  "polarity": ["positief", "negatief", "gemengd"]
+}

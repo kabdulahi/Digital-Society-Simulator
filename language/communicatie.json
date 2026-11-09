@@ -1,0 +1,57 @@
+{
+  "description": "Zelf samengestelde woordgroepen en zinsdelen voor synthetische simulatiecommunicatie. Geen corpus of volledige grammatica.",
+  "topics": [
+    "het onderlinge vertrouwen", "de toegankelijkheid van voorzieningen", "de verdeling van middelen", "de kwaliteit van de informatie",
+    "de samenwerking tussen organisaties", "de verantwoordelijkheid van het bestuur", "de betrouwbaarheid van onderzoek", "de invloed van de media",
+    "de continuïteit van de gezondheidszorg", "de kansen in het onderwijs", "de positie van kwetsbare groepen", "de transparantie van besluiten",
+    "de maatschappelijke gevolgen", "de beschikbare ondersteuning", "de bescherming van persoonlijke gegevens", "de onafhankelijkheid van toezicht",
+    "de financiële onzekerheid", "de vertegenwoordiging van burgers", "de kwaliteit van het overleg", "de legitimiteit van het beleid",
+    "de verdeling van verantwoordelijkheden", "het vertrouwen in instellingen", "de uitlegbaarheid van beslissingen", "de toegang tot betrouwbare kennis",
+    "het effect van de verstoring", "de verschillen tussen perspectieven", "de gevolgen op langere termijn", "de afweging tussen belangen",
+    "de ruimte voor tegenspraak", "de stabiliteit van de gemeenschap", "de mogelijkheid om fouten te herstellen", "de uitvoerbaarheid van voorstellen",
+    "de wederzijdse verwachtingen", "de mate van onzekerheid", "de zorgvuldigheid van procedures", "de communicatie met betrokkenen",
+    "de onderbouwing van aannames", "de druk op medewerkers", "de betrouwbaarheid van signalen", "de samenhang tussen maatregelen"
+  ],
+  "subordinate": [
+    "hoewel wij {topic} zorgvuldig bespreken", "terwijl wij {topic} vanuit verschillende perspectieven bekijken",
+    "omdat wij {topic} niet los van de context kunnen beoordelen", "hoewel wij over {topic} nog niet alles weten",
+    "aangezien wij {topic} regelmatig opnieuw moeten beoordelen", "terwijl wij de gevolgen voor {topic} onderzoeken",
+    "omdat wij de onzekerheid rond {topic} serieus nemen", "hoewel wij {topic} niet op dezelfde manier beleven",
+    "aangezien wij de gevolgen van keuzes voor {topic} moeten meewegen", "terwijl wij naar argumenten over {topic} luisteren",
+    "hoewel wij de situatie rond {topic} verschillend inschatten", "omdat wij vragen hebben over {topic}",
+    "terwijl wij nieuwe informatie over {topic} verwerken", "hoewel wij bij {topic} met onzekerheid rekening houden",
+    "aangezien wij {topic} niet uitsluitend vanuit één standpunt kunnen begrijpen", "omdat wij onze aannames over {topic} willen toetsen"
+  ],
+  "responses": [
+    "{ask} {subject} om een zorgvuldige afweging", "{want} {subject} eerst de argumenten naast elkaar leggen",
+    "{find} {subject} dat alle betrokkenen gehoord moeten worden", "{think} {subject} dat meer uitleg nodig is",
+    "{propose} {subject} voor om de gevolgen verder te onderzoeken", "{advocate} {subject} voor een open gesprek",
+    "{consider} {subject} het belangrijk om onzekerheden te benoemen", "{wish} {subject} ruimte voor een andere uitleg",
+    "{think} {subject} dat een voorlopig oordeel zorgvuldig moet worden onderbouwd", "{ask} {subject} om concrete voorbeelden",
+    "{propose} {subject} voor om de verschillende belangen expliciet te maken", "{find} {subject} dat wij onze aannames moeten controleren",
+    "{want} {subject} de beschikbare informatie met anderen delen", "{advocate} {subject} voor een transparante werkwijze",
+    "{consider} {subject} het noodzakelijk om mogelijke gevolgen te bespreken", "{wish} {subject} meer aandacht voor de context"
+  ],
+  "followup_agree": [
+    "Onze standpunten lijken op dit moment dicht bij elkaar te liggen", "Ik herken overeenkomsten tussen onze perspectieven",
+    "Wij lijken een deel van dezelfde zorgen te delen", "Er lijkt ruimte te zijn om op onze overeenstemming voort te bouwen",
+    "Dat biedt een uitgangspunt om samen verder te onderzoeken", "Een gezamenlijk vertrekpunt kan het overleg ondersteunen"
+  ],
+  "followup_disagree": [
+    "Onze standpunten lopen op dit moment uiteen", "Ik vermoed dat wij verschillende uitgangspunten hanteren",
+    "Daarbij merk ik op dat onze perspectieven niet samenvallen", "Wij lijken de situatie op verschillende manieren te beoordelen",
+    "Die verschillen verdienen aandacht voordat wij conclusies trekken", "Een open gesprek kan duidelijk maken waar onze opvattingen uiteenlopen"
+  ],
+  "followup_neutral": [
+    "Ik wil graag begrijpen welke argumenten voor jou het zwaarst wegen", "Het blijft belangrijk om informatie opnieuw te toetsen",
+    "Daarbij kunnen wij onze eerdere aannames ter discussie stellen", "De uitkomst hangt mede af van informatie die nog ontbreekt",
+    "Ik stel voor om ook naar mogelijke neveneffecten te kijken", "Een zorgvuldig vervolg vraagt om duidelijke afspraken"
+  ],
+  "transitions": ["Daarbij", "Verder", "Bovendien", "Tegelijkertijd", "Voorlopig", "In dit verband"],
+  "reflections": [
+    "blijft het belangrijk om naar afwijkende meningen te luisteren", "kunnen wij onze verwachtingen nader toelichten",
+    "moeten wij onderscheid maken tussen een waarneming en een interpretatie", "is het verstandig om de gevolgen regelmatig te evalueren",
+    "kunnen nieuwe inzichten aanleiding geven om het standpunt te herzien", "verdient de verdeling van verantwoordelijkheden aandacht",
+    "is het van belang om de beschikbare informatie controleerbaar te maken", "kan onzekerheid worden besproken zonder meteen een conclusie te trekken"
+  ]
+}

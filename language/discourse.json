@@ -1,0 +1,5 @@
+{
+  "relations": ["cause", "contrast", "concession", "condition", "result", "elaboration"],
+  "connectors": {"cause": ["omdat", "aangezien"], "contrast": ["maar", "daarentegen"], "concession": ["hoewel", "desondanks"], "condition": ["mits", "als"], "result": ["bijgevolg", "daarom"], "elaboration": ["bovendien", "namelijk"]},
+  "registers": ["formeel", "neutraal", "overleggend"]
+}

@@ -3,8 +3,11 @@
 from __future__ import annotations
 import csv
 import copy
+import hashlib
+import json
 import math
 import random
+import re
 import tkinter as tk
 from collections import deque
 from dataclasses import dataclass, field
@@ -15,6 +18,89 @@ from tkinter import ttk, filedialog
 ORG_NAMES = ["Onderwijs", "Gezondheidszorg", "Bestuur", "Media", "Economie", "Onderzoek", "Gemeenschapsraad"]
 ORG_COLORS = ["#f59e0b", "#06b6d4", "#a78bfa", "#fb7185", "#34d399", "#60a5fa", "#eab308"]
 BG, PANEL, FG, MUTED, ACCENT = "#0b1220", "#111c2d", "#e5eefb", "#9aafc7", "#60a5fa"
+LANGUAGE_DIR = Path(__file__).with_name("language")
+
+
+def _language_data(filename, fallback):
+    try:
+        with (LANGUAGE_DIR / filename).open(encoding="utf-8") as stream:
+            return json.load(stream)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return fallback
+
+
+class DutchGrammar:
+    """C1-georiënteerde, gecontroleerde subset voor betekenisvolle simulatieberichten."""
+    _lexicon = _language_data("lexicon.json", {})
+    _grammar = _language_data("grammar.json", {})
+    _morphology = _language_data("morphology.json", {})
+    _semantics = _language_data("semantics.json", {})
+    _discourse = _language_data("discourse.json", {})
+    _communication = _language_data("communicatie.json", {})
+    subjects = _lexicon.get("subjects", ["ik", "jij", "hij", "zij", "wij"])
+    verbs = _lexicon.get("verbs", [("analyseren", "analyseert", "analyseren"), ("bespreken", "bespreekt", "bespreken"),
+             ("beoordelen", "beoordeelt", "beoordelen"), ("onderzoeken", "onderzoekt", "onderzoeken"),
+             ("wegen", "weegt", "wegen"), ("onderbouwen", "onderbouwt", "onderbouwen"),
+             ("nuanceren", "nuanceert", "nuanceren"), ("verzoenen", "verzoent", "verzoenen")])
+    objects = _lexicon.get("objects", ["de toestand", "het vertrouwen", "de gezamenlijke situatie", "de nieuwe informatie",
+               "de institutionele verantwoordelijkheid", "de maatschappelijke consequenties",
+               "de onderliggende aannames", "de verdeling van middelen"])
+    connectors = _grammar.get("connectors", ["hoewel", "aangezien", "daarentegen", "desondanks", "bijgevolg", "voor zover"])
+    adverbs = _lexicon.get("adverbs", ["zorgvuldig", "systematisch", "vooralsnog", "expliciet", "terughoudend", "kritisch"])
+    nouns = _lexicon.get("nouns", [])
+    evaluations = _lexicon.get("evaluations", [])
+    templates = _grammar.get("templates", [])
+
+    @classmethod
+    def sentence(cls, subject, opinion, stress, trust, target, *, step=0, sender=0, recipient_opinion=None):
+        """Compose controlled Dutch with a local RNG; never consume the simulation RNG."""
+        data = cls._communication
+        required = ("topics", "subordinate", "responses", "followup_neutral", "followup_agree", "followup_disagree", "transitions", "reflections")
+        if not all(data.get(key) for key in required):
+            return "Ik wil graag met jou over onze standpunten spreken."
+        subject = subject.casefold()
+        if subject not in cls.subjects:
+            raise ValueError(f"Onbekend onderwerp: {subject}")
+        seed = f"{step}|{sender}|{target}|{opinion:.6f}|{stress:.6f}|{trust:.6f}"
+        rng = random.Random(int.from_bytes(hashlib.sha256(seed.encode("utf-8")).digest()[:8], "big"))
+        forms = {
+            "ask": ("vraag", "vraagt", "vragen"), "want": ("wil", "wil", "willen"),
+            "find": ("vind", "vindt", "vinden"), "think": ("denk", "denkt", "denken"),
+            "propose": ("stel", "stelt", "stellen"), "advocate": ("pleit", "pleit", "pleiten"),
+            "consider": ("acht", "acht", "achten"), "wish": ("wens", "wenst", "wensen"),
+        }
+        column = 2 if subject == "wij" else 1 if subject in ("hij", "zij") else 0
+        values = {key: variants[column] for key, variants in forms.items()}
+        values.update(subject=subject, topic=rng.choice(data["topics"]))
+        subordinate = rng.choice(data["subordinate"]).format(**values)
+        response = rng.choice(data["responses"]).format(**values)
+        if recipient_opinion is None:
+            group = "followup_neutral"
+        else:
+            group = "followup_agree" if abs(opinion - recipient_opinion) < .15 else "followup_disagree"
+        followup = rng.choice(data[group])
+        reflection = rng.choice(data["reflections"])
+        return f"{subordinate[0].upper() + subordinate[1:]}, {response}. {followup}. {rng.choice(data['transitions'])} {reflection}."
+
+    @classmethod
+    def parse(cls, sentence):
+        tokens = re.findall(r"[^\W\d_]+", sentence.lower(), flags=re.UNICODE)
+        subordinate = any(w in tokens for w in ("omdat", "dat", "als", "hoewel", "aangezien", "terwijl", "mits"))
+        coordination = any(w in tokens for w in ("en", "maar", "of"))
+        return {"tokens": len(tokens), "subordinate_clause": subordinate,
+                "coordination": coordination, "accepted_fragment": None,
+                "method": "oppervlakkige trefwoordherkenning; geen grammaticale validatie"}
+
+    @classmethod
+    def analyze(cls, sentence):
+        tokens = re.findall(r"[^\W\d_]+", sentence.lower(), flags=re.UNICODE)
+        connectors = cls._discourse.get("connectors", {})
+        relation = next((name for name, words in connectors.items() if any(w in tokens for w in words)), None)
+        speech_act = "voorstellen" if "voorstel" in tokens or "voor" in tokens and "stel" in tokens else "onbekend"
+        domains = [domain for domain in cls._semantics.get("domains", []) if domain.casefold() in tokens]
+        return {"surface": sentence, "tokens": tokens, "syntax": cls.parse(sentence),
+                "semantics": {"speech_act": speech_act, "domains": domains, "roles": []},
+                "discourse": {"relation": relation, "register": "onbekend"}}
 
 
 def clamp(x, lo=-1.0, hi=1.0):
@@ -43,6 +129,18 @@ class Organization:
     responsiveness: float
 
 
+@dataclass(frozen=True)
+class DossierEntry:
+    step: int
+    episode: int
+    kind: str
+    sender: str
+    recipient: str
+    topic: str
+    message: str
+    evidence: str
+
+
 @dataclass
 class Settings:
     social_influence: float = 0.25
@@ -59,6 +157,9 @@ class Settings:
     seed: int = 20261109
     max_steps: int = 2500
     anneal: bool = True
+    controversy: float = 0.10
+    polarization: float = 0.00
+    institutional_alignment: float = 0.50
 
 
 class Society:
@@ -73,9 +174,12 @@ class Society:
         self.organizations: list[Organization] = []
         self.edges: list[tuple[int, int]] = []
         self.history = deque(maxlen=350)
-        self.snapshots = deque(maxlen=350)
+        self.snapshots = deque(maxlen=1200)
         self.transitions = deque(maxlen=400)
         self.communication_log = deque(maxlen=1800)
+        self.dossiers = [deque(maxlen=5000) for _ in ORG_NAMES]
+        self.dossier_discarded = [0 for _ in ORG_NAMES]
+        self.anomalies = deque(maxlen=1200)
         self.log = deque(maxlen=1200)
         self.converged = False
         self.stability_count = 0
@@ -88,6 +192,15 @@ class Society:
                                copy.deepcopy(self.individuals),
                                copy.deepcopy(self.organizations),
                                list(self.history)))
+
+    def _detect_anomalies(self, mean, spread, delta, policy_gap):
+        reasons=[]
+        if delta > max(.08, self.cfg.tolerance*12): reasons.append(f"grote toestandsprong Δ={delta:.3f}")
+        if spread > .80: reasons.append(f"hoge divergentie spread={spread:.3f}")
+        if policy_gap > 1.25: reasons.append(f"grote beleidsafstand={policy_gap:.3f}")
+        if len(self.history)>1 and abs(spread-self.history[-2][2])>.18: reasons.append("snelle verandering in spreiding")
+        if reasons:
+            self.anomalies.append((self.global_step,self.episode,"; ".join(reasons)))
 
     def _create(self):
         r = self.rng
@@ -110,6 +223,22 @@ class Society:
 
     def _event(self, kind, msg):
         self.log.append((self.global_step, self.episode, kind, msg))
+
+    def _dossier_entry(self, organization, kind, sender, recipient, topic, message, evidence):
+        entries = self.dossiers[organization]
+        if len(entries) == entries.maxlen:
+            self.dossier_discarded[organization] += 1
+        entries.append(DossierEntry(self.global_step, self.episode, kind, sender,
+                                    recipient, topic, message, evidence))
+
+    def dossier_entries(self, organization, step, episode, kind="Alles", member="", query=""):
+        """Chronological records visible at a snapshot; the same step may span episodes."""
+        member, query = member.strip().casefold(), query.strip().casefold()
+        return [entry for entry in self.dossiers[organization]
+                if (entry.step, entry.episode) <= (step, episode)
+                and (kind == "Alles" or entry.kind == kind)
+                and (not member or member in entry.sender.casefold() or member in entry.recipient.casefold())
+                and (not query or query in (entry.topic + " " + entry.message + " " + entry.evidence).casefold())]
 
     def new_episode(self, force=False):
         self.episode += 1
@@ -146,20 +275,40 @@ class Society:
             org = self.organizations[i.affiliation]
             target = ((1-c.social_influence-c.institutional_influence)*old[i.id]
                       + c.social_influence*peer + c.institutional_influence*i.trust*org.legitimacy*oldp[i.affiliation] + c.institutional_influence*(1-i.trust*org.legitimacy)*old[i.id])
-            change = c.relaxation * i.susceptibility * (0.25 + 0.75*c.communication) * (target - old[i.id])
-            change += shock * (0.25 + 0.3*i.susceptibility) + r.gauss(0, temp)*.10
+            convergence = c.relaxation * i.susceptibility * (0.25 + 0.75*c.communication) * (target - old[i.id])
+            divergence = c.controversy * c.polarization * (old[i.id] - peer)
+            controversy_noise = r.gauss(0, temp) * (.10 + .35*c.controversy)
+            change = convergence + divergence + shock * (0.25 + 0.3*i.susceptibility) + controversy_noise
             new_op.append(clamp(old[i.id] + change))
             for neighbor in sorted(i.neighbors, key=lambda j: abs(old[j] - old[i.id]), reverse=True)[:2]:
                 direction = "eensgezind" if abs(old[neighbor] - old[i.id]) < .15 else "verschillend"
+                text = DutchGrammar.sentence("ik", old[i.id], i.stress, i.trust, neighbor,
+                    step=self.global_step, sender=i.id, recipient_opinion=old[neighbor])
+                analysis=DutchGrammar.analyze(text)
                 self.communication_log.append((self.global_step, self.episode, f"P{i.id:02d}", f"P{neighbor:02d}",
-                    "opinie en vertrouwen", f"Mijn standpunt is {old[i.id]:+.2f}; jouw standpunt is {old[neighbor]:+.2f} ({direction})."))
+                    "opinie en vertrouwen", text + f" [{direction}; trefwoordanalyse={len(analysis['tokens'])} woorden]"))
+                other_org = self.individuals[neighbor].affiliation
+                sender, recipient = f"P{i.id:02d}", f"P{neighbor:02d}"
+                evidence = (f"Opinie afzender vóór stap: {old[i.id]:+.4f}; ontvanger: {old[neighbor]:+.4f}; "
+                            f"gemiddelde van alle buren: {peer:+.4f}. Getoonde tekst is gegenereerd; "
+                            "deze geselecteerde contacten zijn geen afzonderlijk berekende invloed.")
+                kind = "Intern gesprek" if other_org == i.affiliation else "Extern gesprek"
+                self._dossier_entry(i.affiliation, kind, sender, recipient, "Opinie en vertrouwen", text, evidence)
+                if other_org != i.affiliation:
+                    self._dossier_entry(other_org, kind, sender, recipient, "Opinie en vertrouwen", text, evidence)
         new_p = []
         for org in self.organizations:
             members = [new_op[i.id] for i in self.individuals if i.affiliation == org.id]
             local = sum(members)/len(members)
             other = sum(oldp[j] for j in range(7) if j != org.id)/6
-            target = (1-c.coordination)*local + c.coordination*other
+            target = (1-c.coordination)*local + c.coordination*(c.institutional_alignment*other + (1-c.institutional_alignment)*oldp[org.id])
             new_p.append(clamp(oldp[org.id] + c.relaxation*org.responsiveness*(0.25+0.75*c.communication)*org.resources*(target-oldp[org.id]) + shock*.18))
+            self._dossier_entry(org.id, "Terugkoppeling", "Leden (gemiddelde)", org.name,
+                "Beleidsupdate", f"Gemiddelde ledenopinie {local:+.4f}; beleid {oldp[org.id]:+.4f} → {new_p[-1]:+.4f}.",
+                f"Gemiddeld ander beleid (vorige stap): {other:+.4f}; doel: {target:+.4f}; "
+                f"coördinatie: {c.coordination:.4f}; afstemming: {c.institutional_alignment:.4f}; "
+                f"responsiviteit: {org.responsiveness:.4f}; middelen: {org.resources:.4f}; schok: {shock:+.4f}. "
+                "Dit zijn modelwaarden, geen gemeten menselijke communicatie of causale toeschrijving.")
         delta = max([abs(a-b) for a,b in zip(new_op, old)] + [abs(a-b) for a,b in zip(new_p, oldp)])
         for i, v in zip(self.individuals, new_op):
             prior = i.opinion
@@ -177,11 +326,15 @@ class Society:
         for o in self.organizations:
             self.communication_log.append((self.global_step, self.episode, o.name, "alle leden",
                 "beleid en legitimiteit", f"Beleid {o.policy:+.2f}; legitimiteit {o.legitimacy:.2f}; middelen {o.resources:.2f}."))
+            self._dossier_entry(o.id, "Organisatiebericht", o.name, "alle leden", "Beleid en legitimiteit",
+                f"Beleid {o.policy:+.4f}; legitimiteit {o.legitimacy:.4f}; middelen {o.resources:.4f}.",
+                "Synthetische samenvatting van de organisatietoestand na de beleidsupdate.")
         vals = new_op + new_p
         mean = sum(new_op)/37
         spread = math.sqrt(sum((v-mean)**2 for v in new_op)/37)
         policy_gap = max(new_p)-min(new_p)
         self.history.append((self.global_step, mean, spread, delta, policy_gap))
+        self._detect_anomalies(mean, spread, delta, policy_gap)
         self.stability_count = self.stability_count + 1 if delta < c.tolerance and not shock else 0
         self.converged = self.stability_count >= c.stable_window
         if self.global_step % 12 == 0:
@@ -211,6 +364,7 @@ class SimulatorApp(tk.Tk):
         self.after(60, self._tick)
 
     def _ui(self):
+        self.option_add("*Font", ("Segoe UI", 10))
         style = ttk.Style(self)
         style.theme_use("clam")
         style.configure("TFrame", background=BG)
@@ -219,8 +373,8 @@ class SimulatorApp(tk.Tk):
         style.configure("TNotebook.Tab", padding=(14,8))
         style.configure("Treeview", background=PANEL, fieldbackground=PANEL, foreground=FG, rowheight=25)
         style.configure("Treeview.Heading", background="#203047", foreground=FG)
-        self.columnconfigure(0, weight=1)
-        self.columnconfigure(1, weight=0)
+        self.columnconfigure(0, weight=0)
+        self.columnconfigure(1, weight=1)
         self.rowconfigure(1, weight=1)
         head = tk.Frame(self, bg=BG)
         head.grid(row=0,column=0,columnspan=2,sticky="ew",padx=14,pady=12)
@@ -228,7 +382,7 @@ class SimulatorApp(tk.Tk):
         self.status = tk.Label(head,text="GEREED",fg="#34d399",bg=BG,font=("Consolas",11,"bold"))
         self.status.pack(side="right")
         left = tk.Frame(self,bg=BG)
-        left.grid(row=1,column=0,sticky="nsew",padx=(14,6),pady=(0,14))
+        left.grid(row=1,column=1,sticky="nsew",padx=(6,14),pady=(0,14))
         left.rowconfigure(0,weight=3)
         left.rowconfigure(1,weight=2)
         left.rowconfigure(2,weight=0)
@@ -240,19 +394,46 @@ class SimulatorApp(tk.Tk):
         states = tk.Frame(top,bg=PANEL)
         individuals_view = tk.Frame(top,bg=PANEL)
         organizations_view = tk.Frame(top,bg=PANEL)
+        dossier_view = tk.Frame(top,bg=PANEL)
+        inspect_view = tk.Frame(top,bg=PANEL)
+        relation_view = tk.Frame(top,bg=PANEL)
         top.add(network,text="  NETWERK  ")
         top.add(metrics,text="  METRIEKEN  ")
         top.add(states,text="  TOESTANDEN  ")
         top.add(individuals_view,text="  INDIVIDUEN  ")
         top.add(organizations_view,text="  ORGANISATIES  ")
+        top.add(dossier_view,text="  ORGANISATIEDOSSIERS  ")
+        top.add(inspect_view,text="  PRIMITIEVEN & LOGS  ")
+        top.add(relation_view,text="  BILATERALE RELATIES  ")
         self.network_canvas = tk.Canvas(network,bg=PANEL,highlightthickness=0)
         self.network_canvas.pack(fill="both",expand=True)
         self.metric_canvas = tk.Canvas(metrics,bg=PANEL,highlightthickness=0)
         self.metric_canvas.pack(fill="both",expand=True)
-        self.individual_canvas = tk.Canvas(individuals_view,bg=PANEL,highlightthickness=0)
-        self.individual_canvas.pack(fill="both",expand=True)
+        nav=tk.Frame(individuals_view,bg=PANEL); nav.pack(side="left",fill="y")
+        self.individual_list=tk.Listbox(nav,bg="#17263a",fg=FG,selectbackground="#31577e",width=24,relief="flat")
+        self.individual_list.pack(fill="y",expand=True,padx=8,pady=8)
+        self.individual_list.bind("<<ListboxSelect>>",lambda _ : self._refresh_individual_dashboard())
+        self.individual_canvas=tk.Canvas(individuals_view,bg=PANEL,highlightthickness=0)
+        self.individual_canvas.pack(side="left",fill="both",expand=True)
         self.organization_canvas = tk.Canvas(organizations_view,bg=PANEL,highlightthickness=0)
         self.organization_canvas.pack(fill="both",expand=True)
+        self._build_dossier(dossier_view)
+        self.inspect_tree=ttk.Treeview(inspect_view,columns=("path","value"),show="headings")
+        self.inspect_tree.heading("path",text="Toestandsprimitief / logveld"); self.inspect_tree.heading("value",text="Waarde")
+        self.inspect_tree.column("path",width=300); self.inspect_tree.column("value",width=700)
+        self.inspect_tree.pack(fill="both",expand=True,padx=8,pady=8)
+        relbar=tk.Frame(relation_view,bg=PANEL); relbar.pack(fill="x",padx=10,pady=8)
+        tk.Label(relbar,text="Entiteit A",bg=PANEL,fg=MUTED).pack(side="left")
+        self.rel_a=tk.StringVar(value="P00")
+        self.rel_a_combo=ttk.Combobox(relbar,textvariable=self.rel_a,state="readonly",width=22); self.rel_a_combo.pack(side="left",padx=5)
+        tk.Label(relbar,text="Entiteit B",bg=PANEL,fg=MUTED).pack(side="left",padx=(12,0))
+        self.rel_b=tk.StringVar(value="P01")
+        self.rel_b_combo=ttk.Combobox(relbar,textvariable=self.rel_b,state="readonly",width=22); self.rel_b_combo.pack(side="left",padx=5)
+        self.show_org_var=tk.BooleanVar(value=True)
+        tk.Checkbutton(relbar,text="Organisaties tonen",variable=self.show_org_var,bg=PANEL,fg=FG,selectcolor="#243850",activebackground=PANEL,command=self._refresh_relation_choices).pack(side="left",padx=10)
+        self.rel_a_combo.bind("<<ComboboxSelected>>",lambda _:self._draw_relationships())
+        self.rel_b_combo.bind("<<ComboboxSelected>>",lambda _:self._draw_relationships())
+        self.relationship_canvas=tk.Canvas(relation_view,bg=PANEL,highlightthickness=0); self.relationship_canvas.pack(fill="both",expand=True)
         columns=("id","org","opinion","trust","stress","resources")
         self.state_tree=ttk.Treeview(states,columns=columns,show="headings")
         for k,label,width in zip(columns,["Actor","Organisatie","Opinie","Vertrouwen","Stress","Middelen"],[75,190,105,110,100,110]):
@@ -264,18 +445,22 @@ class SimulatorApp(tk.Tk):
         logframe=tk.Frame(bottom,bg=PANEL)
         transframe=tk.Frame(bottom,bg=PANEL)
         commframe=tk.Frame(bottom,bg=PANEL)
+        anomalyframe=tk.Frame(bottom,bg=PANEL)
         bottom.add(logframe,text="  LIVE LOGTAIL  ")
         bottom.add(transframe,text="  STATE TRANSITIONS  ")
         bottom.add(commframe,text="  COMMUNICATIELOG  ")
+        bottom.add(anomalyframe,text="  ANOMALIEËN  ")
         self.logbox=tk.Text(logframe,bg=PANEL,fg="#b9d6f0",font=("Consolas",10),wrap="none",relief="flat")
         self.logbox.pack(fill="both",expand=True)
         self.transbox=tk.Text(transframe,bg=PANEL,fg="#b9d6f0",font=("Consolas",10),wrap="none",relief="flat")
         self.transbox.pack(fill="both",expand=True)
         self.comm_box=tk.Text(commframe,bg=PANEL,fg="#b9d6f0",font=("Consolas",9),wrap="none",relief="flat")
         self.comm_box.pack(fill="both",expand=True)
+        self.anomaly_box=tk.Text(anomalyframe,bg=PANEL,fg="#ffd2a6",font=("Consolas",9),wrap="none",relief="flat")
+        self.anomaly_box.pack(fill="both",expand=True)
         self._build_trace_footer(left)
         right=tk.Frame(self,bg=PANEL,width=335)
-        right.grid(row=1,column=1,sticky="ns",padx=(6,14),pady=(0,14))
+        right.grid(row=1,column=0,sticky="ns",padx=(14,6),pady=(0,14))
         right.grid_propagate(False)
         canvas=tk.Canvas(right,bg=PANEL,highlightthickness=0,width=335)
         scroll=ttk.Scrollbar(right,orient="vertical",command=canvas.yview)
@@ -293,6 +478,17 @@ class SimulatorApp(tk.Tk):
             tk.Button(row,text=text,command=action,bg="#243850",fg=FG,activebackground="#385477",relief="flat",padx=8,pady=9).pack(side="left",expand=True,fill="x",padx=2)
         tk.Button(controls,text="Eén stap uitvoeren",command=self.one_step,bg="#243850",fg=FG,relief="flat",pady=8).pack(fill="x",padx=14,pady=4)
         tk.Button(controls,text="Nieuwe omgevings-episode",command=self.new_episode,bg="#243850",fg=FG,relief="flat",pady=8).pack(fill="x",padx=14,pady=4)
+        tk.Label(controls,text="GEWENSTE TOESTAND",bg=PANEL,fg=FG,font=("Segoe UI",11,"bold")).pack(anchor="w",padx=14,pady=(14,3))
+        self.target_mean=tk.DoubleVar(value=0.0); self.target_spread=tk.DoubleVar(value=.25); self.target_gap=tk.DoubleVar(value=.35)
+        for label,var,lo,hi in [("Gemiddelde opinie",self.target_mean,-1,1),("Gewenste spreiding",self.target_spread,0,1),("Maximale beleidsafstand",self.target_gap,0,2)]:
+            f=tk.Frame(controls,bg=PANEL); f.pack(fill="x",padx=14,pady=2)
+            tk.Label(f,text=label,bg=PANEL,fg=MUTED).pack(anchor="w")
+            tk.Scale(f,from_=lo,to=hi,variable=var,resolution=.01,orient="horizontal",bg=PANEL,fg=FG,highlightthickness=0,troughcolor="#31435b").pack(fill="x")
+        tk.Button(controls,text="Optimaliseer parameters",command=self.optimize,bg="#326b55",fg=FG,relief="flat",pady=10).pack(fill="x",padx=14,pady=(8,4))
+        regime=tk.Frame(controls,bg=PANEL); regime.pack(fill="x",padx=12,pady=(3,8))
+        tk.Button(regime,text="Stabiel",command=lambda:self.set_regime("stable"),bg="#24516b",fg=FG,relief="flat").pack(side="left",expand=True,fill="x",padx=2)
+        tk.Button(regime,text="Chaos",command=lambda:self.set_regime("chaos"),bg="#7a3f52",fg=FG,relief="flat").pack(side="left",expand=True,fill="x",padx=2)
+        tk.Label(controls,text="Random coordinate search · doel = toestand benaderen",bg=PANEL,fg=MUTED,font=("Segoe UI",9)).pack(anchor="w",padx=14)
         self._slider(controls,"social_influence","Sociale beïnvloeding",0,.75,.25)
         self._slider(controls,"institutional_influence","Institutionele invloed",0,.75,.18)
         self._slider(controls,"coordination","Interorganisationele coördinatie",0,1,.2)
@@ -302,6 +498,10 @@ class SimulatorApp(tk.Tk):
         self._slider(controls,"shock_strength","Sterkte van verstoringen",0,.9,.35)
         self._slider(controls,"trust_adaptation","Vertrouwensadaptatie",0,.5,.08)
         self._slider(controls,"relaxation","Aanpassingssnelheid",.01,.8,.14)
+        tk.Label(controls,text="DIVERGENTIE & REGIME",bg=PANEL,fg=FG,font=("Segoe UI",11,"bold")).pack(anchor="w",padx=14,pady=(12,2))
+        self._slider(controls,"controversy","Controversie / ruisversterking",0,1,.10)
+        self._slider(controls,"polarization","Polarisatie / uiteen trekken",0,1,0.0)
+        self._slider(controls,"institutional_alignment","Institutionele afstemming",0,1,.50)
         self._slider(controls,"tolerance","Convergentiedrempel",.001,.04,.007, digits=4)
         self._slider(controls,"stable_window","Stabiele opeenvolgende stappen",5,80,22,integer=True)
         tk.Checkbutton(controls,text="Automatisch nieuwe episodes",variable=self.auto_episodes,bg=PANEL,fg=FG,selectcolor="#243850",activebackground=PANEL).pack(anchor="w",padx=14,pady=8)
@@ -380,6 +580,37 @@ class SimulatorApp(tk.Tk):
         self.trace_index=max(0,min(len(self.sim.snapshots)-1,self.trace_var.get()))
         self._refresh()
 
+    def optimize(self):
+        """Bounded random coordinate search over influential settings."""
+        self.running=False; base=copy.deepcopy(self.cfg)
+        keys=["social_influence","institutional_influence","coordination","communication","relaxation"]
+        bounds={"social_influence":(.02,.75),"institutional_influence":(.02,.75),"coordination":(0,1),"communication":(.05,1),"relaxation":(.01,.8)}
+        def score(cfg):
+            probe=Society(cfg)
+            for _ in range(28): probe.step()
+            h=probe.history[-1]
+            return abs(h[1]-self.target_mean.get())+abs(h[2]-self.target_spread.get())+abs(h[4]-self.target_gap.get())
+        best=base; best_score=score(base); rng=random.Random(self.cfg.seed+17)
+        for _ in range(24):
+            candidate=copy.deepcopy(best); key=rng.choice(keys); lo,hi=bounds[key]
+            setattr(candidate,key,max(lo,min(hi,getattr(candidate,key)+rng.uniform(-.12,.12))))
+            candidate.seed += rng.randrange(1,100000)
+            value=score(candidate)
+            if value < best_score: best,best_score=candidate,value
+        self.cfg=best
+        for key,var in self.vars.items(): var.set(getattr(self.cfg,key))
+        self.sim._event("OPTIMIZE",f"Parameterschatting voltooid; foutscore={best_score:.4f}")
+        self._refresh()
+
+    def set_regime(self, regime):
+        values = {"stable": {"controversy": .02, "polarization": 0.0, "shock_probability": .005, "noise": .015, "relaxation": .20, "institutional_alignment": .85},
+                  "chaos": {"controversy": .85, "polarization": .90, "shock_probability": .18, "noise": .35, "relaxation": .08, "institutional_alignment": .10}}
+        for key,value in values[regime].items():
+            setattr(self.cfg,key,value)
+            if key in self.vars: self.vars[key].set(value)
+        self.sim._event("REGIME",f"Regime ingesteld: {regime}; divergentie={self.cfg.polarization:.2f}, controversie={self.cfg.controversy:.2f}")
+        self._refresh()
+
     def _tick(self):
         if self.running:
             self._apply()
@@ -388,6 +619,7 @@ class SimulatorApp(tk.Tk):
                 if finished:
                     if self.auto_episodes.get():
                         self.sim.new_episode()
+                        self.sim._capture_snapshot()
                     else:
                         self.running=False
                         break
@@ -406,10 +638,32 @@ class SimulatorApp(tk.Tk):
         self.trace_label.config(text=f"t={step}  E{episode:03d}  ({idx+1}/{len(s.snapshots)})")
         last=s.history[-1] if s.history else (0,0,0,0,0)
         self.status.config(text=f"{'ACTIEF' if self.running else 'PAUZE'}  |  EPISODE {s.episode}  |  STAP {s.global_step}  |  Δ {last[3]:.5f}  |  STABILITEIT {s.stability_count}/{self.cfg.stable_window}")
+        if s.anomalies and s.anomalies[-1][0] == step:
+            self.status.config(fg="#fb7185")
+        else:
+            self.status.config(fg="#34d399" if not self.running else "#fbbf24")
         self._draw_network()
         self._draw_metrics(history, step)
         self._draw_individuals(individuals, step)
         self._draw_organizations(organizations, step)
+        current_selection=self.individual_list.curselection()
+        self.individual_list.delete(0,"end")
+        for i in individuals:
+            self.individual_list.insert("end",f"P{i.id:02d} · {ORG_NAMES[i.affiliation]}")
+        if current_selection and current_selection[0] < len(individuals):
+            self.individual_list.selection_set(current_selection[0])
+        elif individuals:
+            self.individual_list.selection_set(0)
+        self._refresh_individual_dashboard()
+        self._refresh_relation_choices(individuals, organizations)
+        self._refresh_dossier()
+        self.inspect_tree.delete(*self.inspect_tree.get_children())
+        primitive=[("time.step",step),("time.episode",episode),("population.individuals",len(individuals)),("population.organizations",len(organizations)),
+                   ("metrics.history_length",len(history)),("metrics.last_mean",history[-1][1] if history else "—"),
+                   ("metrics.last_spread",history[-1][2] if history else "—"),("metrics.last_delta",history[-1][3] if history else "—"),
+                   ("metrics.policy_gap",history[-1][4] if history else "—"),("logs.communications_total",len(s.communication_log)),
+                   ("logs.transitions_total",len(s.transitions)),("logs.events_total",len(s.log))]
+        for path,value in primitive: self.inspect_tree.insert("","end",values=(path,value))
         self.state_tree.delete(*self.state_tree.get_children())
         for i in individuals:
             self.state_tree.insert("", "end", values=(f"P{i.id:02d}",ORG_NAMES[i.affiliation],f"{i.opinion:+.3f}",f"{i.trust:.3f}",f"{i.stress:.3f}",f"{i.resources:.3f}"))
@@ -420,6 +674,7 @@ class SimulatorApp(tk.Tk):
 
         comms=[x for x in s.communication_log if x[0] <= step][-180:]
         self._update_text(self.comm_box,[f"[{st:06d}/E{ep:03d}] {src:18} -> {dst:18} | {topic}: {message}" for st,ep,src,dst,topic,message in comms])
+        self._update_text(self.anomaly_box,[f"[{st:06d}/E{ep:03d}] {reason}" for st,ep,reason in list(s.anomalies)[-220:]])
 
     def _update_text(self,widget,lines):
         widget.configure(state="normal")
@@ -428,12 +683,123 @@ class SimulatorApp(tk.Tk):
         widget.see("end")
         widget.configure(state="disabled")
 
+    def _build_dossier(self, parent):
+        self.dossier_page = 0
+        self.dossier_records = []
+        self.dossier_org = tk.StringVar(value=ORG_NAMES[0])
+        self.dossier_kind = tk.StringVar(value="Alles")
+        self.dossier_member = tk.StringVar()
+        self.dossier_query = tk.StringVar()
+        bar = tk.Frame(parent, bg=PANEL); bar.pack(fill="x", padx=8, pady=4)
+        tk.Button(bar, text="◀", command=lambda: self._dossier_change_org(-1)).pack(side="left")
+        org = ttk.Combobox(bar, textvariable=self.dossier_org, values=ORG_NAMES, state="readonly", width=19)
+        org.pack(side="left", padx=3); org.bind("<<ComboboxSelected>>", self._dossier_filter_changed)
+        tk.Button(bar, text="▶", command=lambda: self._dossier_change_org(1)).pack(side="left")
+        kind = ttk.Combobox(bar, textvariable=self.dossier_kind, state="readonly", width=20,
+                            values=("Alles", "Intern gesprek", "Extern gesprek", "Terugkoppeling", "Organisatiebericht"))
+        kind.pack(side="left", padx=8); kind.bind("<<ComboboxSelected>>", self._dossier_filter_changed)
+        tk.Label(bar, text="Persoon (P00)", bg=PANEL, fg=FG).pack(side="left")
+        member = tk.Entry(bar, textvariable=self.dossier_member, width=7); member.pack(side="left", padx=4)
+        tk.Label(bar, text="Zoeken", bg=PANEL, fg=FG).pack(side="left")
+        query = tk.Entry(bar, textvariable=self.dossier_query, width=16); query.pack(side="left", padx=4)
+        member.bind("<KeyRelease>", self._dossier_filter_changed); query.bind("<KeyRelease>", self._dossier_filter_changed)
+        tk.Button(bar, text="CSV", command=self._export_dossier).pack(side="right")
+        self.dossier_summary = tk.Label(parent, bg=PANEL, fg=MUTED, anchor="w")
+        self.dossier_summary.pack(fill="x", padx=10)
+        tk.Label(parent, bg=PANEL, fg=MUTED, anchor="w",
+                 text="Groen: intern · blauw: extern · oranje: modelterugkoppeling · paars: organisatiebericht. Gesprekstekst is synthetisch.").pack(fill="x", padx=10)
+        table = tk.Frame(parent, bg=PANEL); table.pack(fill="both", expand=True, padx=8, pady=4)
+        self.dossier_tree = ttk.Treeview(table, columns=("time", "kind", "sender", "recipient", "topic", "message"), show="headings", selectmode="browse", height=6)
+        for key, title, width in (("time", "Tijd / episode", 105), ("kind", "Soort", 120), ("sender", "Van", 100),
+                                  ("recipient", "Aan", 110), ("topic", "Onderwerp", 135), ("message", "Inhoud", 400)):
+            self.dossier_tree.heading(key, text=title); self.dossier_tree.column(key, width=width, minwidth=60)
+        scroll = ttk.Scrollbar(table, orient="vertical", command=self.dossier_tree.yview)
+        self.dossier_tree.configure(yscrollcommand=scroll.set); scroll.pack(side="right", fill="y")
+        self.dossier_tree.pack(side="left", fill="both", expand=True)
+        for tag, color in (("Intern gesprek", "#b4efcf"), ("Extern gesprek", "#b7d7ff"),
+                           ("Terugkoppeling", "#ffd18a"), ("Organisatiebericht", "#d8c5ff")):
+            self.dossier_tree.tag_configure(tag, foreground=color)
+        self.dossier_tree.bind("<<TreeviewSelect>>", self._dossier_show_detail)
+        self.dossier_tree.bind("<Double-1>", self._dossier_jump)
+        pager = tk.Frame(parent, bg=PANEL); pager.pack(fill="x", padx=8)
+        tk.Button(pager, text="◀ Vorige pagina", command=lambda: self._dossier_move_page(-1)).pack(side="left")
+        self.dossier_page_label = tk.Label(pager, bg=PANEL, fg=FG); self.dossier_page_label.pack(side="left", padx=8)
+        tk.Button(pager, text="Volgende pagina ▶", command=lambda: self._dossier_move_page(1)).pack(side="left")
+        tk.Button(pager, text="Ga naar tijdstip", command=self._dossier_jump).pack(side="right")
+        self.dossier_detail = tk.Text(parent, height=4, bg="#17263a", fg=FG, wrap="word", relief="flat")
+        self.dossier_detail.pack(fill="x", padx=8, pady=5)
+
+    def _dossier_filter_changed(self, _event=None):
+        self.dossier_page = 0
+        self._refresh_dossier()
+
+    def _dossier_change_org(self, delta):
+        self.dossier_org.set(ORG_NAMES[(ORG_NAMES.index(self.dossier_org.get()) + delta) % len(ORG_NAMES)])
+        self._dossier_filter_changed()
+
+    def _dossier_move_page(self, delta):
+        self.dossier_page += delta
+        self._refresh_dossier()
+
+    def _refresh_dossier(self):
+        if not hasattr(self, "dossier_tree"): return
+        step, episode, individuals, organizations, _ = self._selected_snapshot()
+        org_id = ORG_NAMES.index(self.dossier_org.get())
+        records = self.sim.dossier_entries(org_id, step, episode, self.dossier_kind.get(),
+                                           self.dossier_member.get(), self.dossier_query.get())
+        self.dossier_records = records
+        pages = max(1, (len(records) + 49) // 50)
+        self.dossier_page = max(0, min(self.dossier_page, pages - 1))
+        selected = self.dossier_tree.selection()
+        selected_id = selected[0] if selected else None
+        self.dossier_tree.delete(*self.dossier_tree.get_children())
+        start = self.dossier_page * 50
+        for index, entry in enumerate(records[start:start + 50], start):
+            self.dossier_tree.insert("", "end", iid=str(index), tags=(entry.kind,),
+                values=(f"{entry.step} / E{entry.episode}", entry.kind, entry.sender, entry.recipient, entry.topic, entry.message))
+        if selected_id is not None and self.dossier_tree.exists(selected_id):
+            self.dossier_tree.selection_set(selected_id)
+        else:
+            self._update_text(self.dossier_detail, ["Selecteer een regel voor inhoud en modelwaarden."])
+        org = organizations[org_id]
+        members = sum(i.affiliation == org_id for i in individuals)
+        discarded = self.sim.dossier_discarded[org_id]
+        self.dossier_summary.config(text=f"{org.name} · {members} leden · beleid {org.policy:+.3f} · legitimiteit {org.legitimacy:.3f} · "
+            f"t={step}, E{episode} · {len(records)} resultaten · {discarded} oudere regels vervallen")
+        self.dossier_page_label.config(text=f"Pagina {self.dossier_page + 1} / {pages} (chronologisch)")
+
+    def _dossier_show_detail(self, _event=None):
+        selection = self.dossier_tree.selection()
+        if not selection: return
+        idx = int(selection[0])
+        if idx >= len(self.dossier_records): return
+        entry = self.dossier_records[idx]
+        self._update_text(self.dossier_detail, [f"{entry.sender} → {entry.recipient} · {entry.kind} · {entry.topic}",
+                                                entry.message, "Modelinformatie: " + entry.evidence])
+
+    def _dossier_jump(self, _event=None):
+        selection = self.dossier_tree.selection()
+        if not selection: return
+        entry = self.dossier_records[int(selection[0])]
+        for index, snap in enumerate(self.sim.snapshots):
+            if (snap[0], snap[1]) == (entry.step, entry.episode):
+                self.running = False; self.trace_index = index; self._refresh(); return
+        self._update_text(self.dossier_detail, ["De snapshot van dit tijdstip is niet meer in de tracebackbuffer.", entry.message, entry.evidence])
+
+    def _export_dossier(self):
+        path = filedialog.asksaveasfilename(defaultextension=".csv", initialfile="organisatiedossier.csv", filetypes=[("CSV", "*.csv")])
+        if not path: return
+        with open(path, "w", newline="", encoding="utf-8-sig") as stream:
+            writer = csv.writer(stream)
+            writer.writerow(["stap", "episode", "soort", "afzender", "ontvanger", "onderwerp", "inhoud", "modelinformatie"])
+            writer.writerows((e.step, e.episode, e.kind, e.sender, e.recipient, e.topic, e.message, e.evidence) for e in self.dossier_records)
+
     def _draw_network(self):
         c=self.network_canvas
         c.delete("all")
         w=max(400,c.winfo_width()); h=max(350,c.winfo_height())
         cx,cy=w/2,h/2
-        snap=self.sim.snapshots[max(0,min(len(self.sim.snapshots)-1,getattr(self,"trace_index",len(self.sim.snapshots)-1)))]
+        snap=self._selected_snapshot()
         individuals,organizations=snap[2],snap[3]
         orgpos=[]
         for j in range(7):
@@ -458,6 +824,56 @@ class SimulatorApp(tk.Tk):
         c.create_text(16,18,anchor="w",text="● ORGANISATIES (GROOT)  ·  INDIVIDUEN (KLEIN)  ·  VERBINDINGEN (LIJNEN)",fill=MUTED,font=("Segoe UI",9))
         c.create_text(16,h-18,anchor="w",text="Kleur = organisatie; getal bij organisatie = beleidstoestand; alle verbindingen blijven binnen de gemeenschap.",fill=MUTED,font=("Segoe UI",9))
 
+    def _refresh_relation_choices(self, individuals=None, organizations=None):
+        if individuals is None:
+            snap=self._selected_snapshot(); individuals,organizations=snap[2],snap[3]
+        people=[f"P{i.id:02d}" for i in individuals]
+        orgs=[f"O{o.id}: {o.name}" for o in organizations] if self.show_org_var.get() else []
+        values=people+orgs
+        self.rel_a_combo["values"]=values; self.rel_b_combo["values"]=values
+        if self.rel_a.get() not in values: self.rel_a.set(values[0] if values else "")
+        if self.rel_b.get() not in values or self.rel_b.get()==self.rel_a.get(): self.rel_b.set(values[1] if len(values)>1 else "")
+        self._draw_relationships()
+
+    def _selected_snapshot(self):
+        idx=getattr(self, "trace_index", -1)
+        if idx < 0: idx=len(self.sim.snapshots)-1
+        idx=max(0,min(len(self.sim.snapshots)-1,idx))
+        return self.sim.snapshots[idx]
+
+    def _entity_at(self, label, individuals, organizations):
+        if label.startswith("P"):
+            return next((i for i in individuals if f"P{i.id:02d}"==label),None), "individual"
+        try: return organizations[int(label[1:].split(":")[0])], "organization"
+        except (ValueError,IndexError): return None, "organization"
+
+    def _draw_relationships(self):
+        if not hasattr(self,"relationship_canvas") or not self.sim.snapshots:return
+        c=self.relationship_canvas; c.delete("all"); w=max(600,c.winfo_width()); h=max(400,c.winfo_height())
+        a_label,b_label=self.rel_a.get(),self.rel_b.get()
+        points=[]
+        for step,episode,inds,orgs,_ in self.sim.snapshots:
+            a,ak=self._entity_at(a_label,inds,orgs); b,bk=self._entity_at(b_label,inds,orgs)
+            if not a or not b: continue
+            av=a.opinion if ak=="individual" else a.policy; bv=b.opinion if bk=="individual" else b.policy
+            opinion=abs(av-bv)/2
+            at=a.trust if ak=="individual" else a.legitimacy; bt=b.trust if bk=="individual" else b.legitimacy
+            trust=abs(at-bt)
+            ar=a.resources; br=b.resources
+            resources=abs(ar-br)
+            distance=.55*opinion+.25*trust+.20*resources
+            points.append((step,distance,opinion,trust,resources))
+        if not points:return
+        c.create_text(18,18,anchor="w",text=f"BILATERALE DIVERGENTIE  {a_label} ↔ {b_label}",fill=FG,font=("Segoe UI",12,"bold"))
+        x0,y0=60,55; pw,ph=w-110,h-130; c.create_rectangle(x0,y0,x0+pw,y0+ph,outline="#34445a")
+        mx=max(.05,max(p[1] for p in points)); line=[]
+        for j,p in enumerate(points): line += [x0+j/max(1,len(points)-1)*pw,y0+ph-p[1]/mx*ph]
+        if len(line)>=4:c.create_line(*line,fill="#fb7185",width=3)
+        current=points[-1]; c.create_text(x0,y0+ph+20,anchor="w",text=f"t={points[0][0]}",fill=MUTED)
+        c.create_text(x0+pw,y0+ph+20,anchor="e",text=f"t={points[-1][0]}",fill=MUTED)
+        c.create_text(x0,y0+ph+48,anchor="w",text=f"afstand={current[1]:.3f}  opinie={current[2]:.3f}  vertrouwen/legitimiteit={current[3]:.3f}  middelen={current[4]:.3f}",fill=FG,font=("Consolas",10))
+        c.create_text(x0,y0+ph+72,anchor="w",text="Attributie: 55% opinie · 25% vertrouwen/legitimiteit · 20% middelen",fill=MUTED,font=("Segoe UI",9))
+
     def _draw_individuals(self, individuals, step):
         c=self.individual_canvas; c.delete("all")
         w=max(450,c.winfo_width())
@@ -469,6 +885,22 @@ class SimulatorApp(tk.Tk):
             c.create_rectangle(x+barw-100,y-8,x+barw,y+2,outline="#34445a")
             c.create_rectangle(x+barw-100,y-8,x+barw-100+(i.opinion+1)/2*100,y+2,fill=ORG_COLORS[i.affiliation],outline="")
             c.create_text(x+barw+8,y-3,anchor="w",text=f"opinie {i.opinion:+.2f} stress {i.stress:.2f} trust {i.trust:.2f}",fill=MUTED,font=("Consolas",8))
+
+    def _refresh_individual_dashboard(self):
+        if not hasattr(self, "individual_list") or not self.individual_list.curselection(): return
+        idx=self.individual_list.curselection()[0]
+        snap=self._selected_snapshot()
+        step,_,individuals,_,_=snap
+        if idx >= len(individuals): return
+        i=individuals[idx]; c=self.individual_canvas; c.delete("all")
+        c.create_text(28,28,anchor="w",text=f"DASHBOARD P{i.id:02d} · {ORG_NAMES[i.affiliation]} · t={step}",fill=FG,font=("Segoe UI",14,"bold"))
+        rows=[("Opinie",i.opinion,-1,1),("Vertrouwen",i.trust,0,1),("Stress",i.stress,0,1),("Middelen",i.resources,0,1),("Vatbaarheid",i.susceptibility,0,1)]
+        for n,(label,value,lo,hi) in enumerate(rows):
+            y=78+n*42; c.create_text(30,y,anchor="w",text=label,fill=MUTED,font=("Segoe UI",10)); c.create_rectangle(150,y-8,470,y+8,outline="#34445a"); c.create_rectangle(150,y-8,150+320*(value-lo)/(hi-lo),y+8,fill=ORG_COLORS[i.affiliation],outline=""); c.create_text(480,y,anchor="w",text=f"{value:+.3f}" if lo<0 else f"{value:.3f}",fill=FG,font=("Consolas",10))
+        c.create_text(30,310,anchor="w",text="Communicatie van deze persoon",fill=FG,font=("Segoe UI",11,"bold"))
+        logs=[x for x in self.sim.communication_log if x[0] <= step and x[2] == f"P{i.id:02d}"][-8:]
+        for n,(_,_,src,dst,topic,message) in enumerate(logs):
+            c.create_text(30,340+n*34,anchor="w",text=f"→ {dst} · {topic}: {message}",fill="#b9d6f0",font=("Consolas",8),width=max(400,c.winfo_width()-60))
 
     def _draw_organizations(self, organizations, step):
         c=self.organization_canvas; c.delete("all")

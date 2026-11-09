@@ -1,0 +1,7 @@
+{
+  "pronouns": {"ik": {"person": 1, "number": "sg"}, "jij": {"person": 2, "number": "sg"}, "hij": {"person": 3, "number": "sg"}, "zij": {"person": 3, "number": "sg"}, "wij": {"person": 1, "number": "pl"}},
+  "tenses": ["present", "past", "perfect", "conditional"],
+  "agreement": {"singular": ["ik", "jij", "hij", "zij"], "plural": ["wij"]},
+  "negation": ["niet", "geen"],
+  "determiners": ["de", "het", "een"]
+}

@@ -1,0 +1,28 @@
+{
+  "subjects": ["ik", "jij", "hij", "zij", "wij"],
+  "verbs": [
+    ["analyseren", "analyseert", "analyseren"],
+    ["bespreken", "bespreekt", "bespreken"],
+    ["beoordelen", "beoordeelt", "beoordelen"],
+    ["onderzoeken", "onderzoekt", "onderzoeken"],
+    ["wegen", "weegt", "wegen"],
+    ["onderbouwen", "onderbouwt", "onderbouwen"],
+    ["nuanceren", "nuanceert", "nuanceren"],
+    ["verzoenen", "verzoent", "verzoenen"]
+  ],
+  "objects": [
+    "de toestand",
+    "het vertrouwen",
+    "de gezamenlijke situatie",
+    "de nieuwe informatie",
+    "de institutionele verantwoordelijkheid",
+    "de maatschappelijke consequenties",
+    "de onderliggende aannames",
+    "de verdeling van middelen"
+  ],
+  "adverbs": ["zorgvuldig", "systematisch", "vooralsnog", "expliciet", "terughoudend", "kritisch", "proportioneel", "geleidelijk", "onmiskenbaar", "voorzichtig", "doordacht", "onderling"],
+  "nouns": ["de legitimiteit", "het maatschappelijk draagvlak", "de informatievoorziening", "de besluitvorming", "de afhankelijkheid", "de handelingsruimte", "de continuïteit", "de kwetsbaarheid", "de verantwoording", "het perspectief", "de consensus", "de onzekerheid"],
+  "adjectives": ["institutioneel", "maatschappelijk", "wederzijds", "structureel", "voorlopig", "duurzaam", "controversieel", "transparant", "evenwichtig", "onverwacht"],
+  "prepositions": ["binnen", "tegenover", "ondanks", "zonder", "met betrekking tot", "in het licht van"],
+  "evaluations": ["is verdedigbaar", "blijft onzeker", "verdient nadere toelichting", "kan niet los worden gezien van de context", "vraagt om een evenwichtige afweging"]
+}
