@@ -2,7 +2,7 @@
 
 `communicatie.json` bevat zelf samengestelde onderwerpen en zinsdelen voor de
 simulatie. `DutchGrammar.sentence` in `simulator.py` combineert ze tot berichten
-van drie zinnen. De keuze is reproduceerbaar per tijdstip en actor, en gebruikt
+van drie zinnen, gevolgd door een zin uit `dutch_formal.py`. De keuze is reproduceerbaar per tijdstip en actor, en gebruikt
 een afzonderlijke generator zodat de simulatie-uitkomsten niet wijzigen door de
 taalgeneratie. Overeenstemming of verschil verwijst naar het werkelijke verschil
 in de gesimuleerde opinies. Het gekozen gespreksonderwerp is fictief en wordt
@@ -19,4 +19,14 @@ rolverdeling of grammaticale correctheid.
 Pas de lijsten in `communicatie.json` aan om het taalgebruik uit te breiden.
 De hoofdzinreacties gebruiken de beschikbare plaatsaanduidingen voor
 werkwoordsvormen en onderwerp; bijzinnen gebruiken `{topic}`. Controleer na
-wijzigingen de grammatica en voer `python -B -m unittest test_language test_dossiers` uit.
+wijzigingen de grammatica en voer `python -B -m unittest test_language test_dossiers test_formal` uit.
+
+`formele_grammatica.json` is het afzonderlijke lexicon voor `DutchFragment`.
+Het ondersteunt persoons- en getalsovereenkomst, inversie, V1-vragen, eenvoudige
+werkwoordfinale bijzinnen en begrensde recursieve `dat`-complementen. De
+grammaticatab in Model Lab toont de geanalyseerde kenmerken. Naamwoordgroepen
+worden opgebouwd uit gespecificeerde zelfstandige naamwoorden, lidwoorden en
+bijvoeglijke naamwoorden, met onderscheid tussen `een mooi huis` en `het mooie
+huis`. Een beperkte betrekkelijke bijzin bij het onderwerp wordt geanalyseerd.
+Een niet-herkende zin kan grammaticaal zijn, maar buiten dit fragment vallen;
+herkenning bewijst ook niet dat de zin semantisch aannemelijk is.

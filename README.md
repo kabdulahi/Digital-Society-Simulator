@@ -25,8 +25,11 @@ On systems where Python 3 is invoked as `python3`, use `python3 simulator.py`. T
 
 ```text
 simulator.py                   Model, Dutch-language generator, and Tkinter UI
+formal_models.py               Synthetic physiology, life course, and formal measures
+dutch_formal.py                Feature-aware Dutch fragment parser and generator
 language/
   communicatie.json            Topics and sentence fragments used by the generator
+  formele_grammatica.json      Finite lexicon and verb agreement for the parser
   lexicon.json                 Pronouns and additional lexical data
   grammar.json                 Legacy templates and grammatical word lists
   morphology.json              Descriptive morphology data
@@ -36,6 +39,7 @@ language/
   README.md                    Notes on the language data
 test_dossiers.py               Dossier filtering, chronology, and retention tests
 test_language.py               Language-generation and integration tests
+test_formal.py                 Grammar and formal-model tests
 ```
 
 Language files are loaded relative to `simulator.py`, not the current working directory. `_language_data()` falls back to the supplied default when a file is missing or contains invalid JSON. In particular, missing or incomplete `communicatie.json` causes the sentence generator to use a short fallback sentence. Existing JSON files are not all fully executable grammar specifications: see [Dutch communication](#dutch-communication).
@@ -47,6 +51,7 @@ The application uses only the Python standard library:
 - `Settings` holds the mutable simulation parameters and seed.
 - `Individual` holds an ID, organization affiliation, opinion, trust, stress, resources, susceptibility, and neighbor IDs.
 - `Organization` holds an ID, name, policy, legitimacy, resources, and responsiveness.
+- Each individual also holds a `Physiology` profile and a `LifeCourse` state; these are copied into snapshots.
 - `Society` owns the agents, network, random generator, step logic, snapshots, metrics, event logs, and dossiers.
 - `DossierEntry` records a timestamped synthetic communication or feedback item and its associated model information.
 - `DutchGrammar` loads language data, composes controlled Dutch text, and performs limited keyword analysis.
@@ -65,6 +70,10 @@ Each call to `Society.step()` advances the global and episode step counters. Ind
 Opinions are clamped to `[-1, 1]`. After individual opinions are calculated, each organization's policy target combines the new mean opinion of its members, the previous policies of the other organizations, and its own previous policy. Coordination and institutional alignment determine the mixture; relaxation, responsiveness, resources, communication, and the shock determine the update. Policies are also clamped to `[-1, 1]`.
 
 Trust moves gradually toward agreement with the updated policy. Stress responds to individual opinion movement and decays gradually. Individual resources and susceptibility, and organization legitimacy and responsiveness, are initialized but do not evolve in ordinary steps; organization resources can change at an episode boundary.
+
+Each individual also has three dimensionless physiological variables: activation, fatigue and recovery. `physiology_step` updates these with bounded equations using stress, social opinion difference, shock and the individual's baseline, reactivity, regulation and sleep-support parameters. The `Model Lab` exposes these parameters per person and plots their snapshot history; apply changes while paused at the latest snapshot. The model contains no physical units or clinical observations. The life-course clock assumes, for illustration, one simulation step per day and labels broad age stages; it does not infer development or clinical properties from age.
+
+An illustrative observation pipeline calculates a weighted proxy from the synthetic stress, activation and fatigue, adds reproducible bounded error, and stores the resulting observation and uncertainty interval in each individual's snapshot. The per-person observation-uncertainty parameter ranges from 0 to 0.25. An example low/middle/high model category is reported as `onzeker` whenever the interval spans a category threshold. Category changes appear as **Modelinschatting** dossier entries. This is a constructed demonstration of the paper's observation and categorization distinction: the interval is not a calibrated statistical confidence interval, and the category is not a diagnosis, a real institutional decision, or an input to the policy update.
 
 The model is an intentionally simplified construction. In particular, generated communication text does not feed back into the numerical update. The two displayed neighbor contacts per individual are selected from its neighbors by opinion difference; the numerical social influence uses the mean of **all** neighbors, not a separately calculated effect for each displayed contact.
 
@@ -87,11 +96,12 @@ The optimizer is a small bounded random coordinate search. It creates fresh `Soc
 - **Netwerk** draws organizations, individual nodes, and social connections.
 - **Metrieken** draws the four metrics for the selected snapshot's retained episode history.
 - **Toestanden** lists individual and organization fields.
-- **Individuen** selects a person and shows selected state values and recent outgoing generated messages.
+- **Personen** selects a person and shows selected state values and recent outgoing generated messages.
 - **Organisaties** displays organization state values.
-- **Organisatiedossiers** browses entries by organization, type, person, and text. Entries distinguish internal and external generated conversations, policy feedback, and organization summaries. Select a row for its message and model information; double-click it or use **Ga naar tijdstip** to select a retained snapshot. The CSV button exports the filtered results, not only the current page.
-- **Primitieven & logs** displays a compact set of metrics and log counts.
-- **Bilaterale relaties** compares two selected entities with a weighted descriptive distance: `0.55 × |opinion/policy difference| / 2 + 0.25 × |trust/legitimacy difference| + 0.20 × |resource difference|`. These weights are visualization choices, not estimates of causal influence. The current implementation plots all retained snapshots and displays the latest plotted point, even when an earlier traceback snapshot is selected.
+- **Dossiers** browses entries by organization, type, person, and text. Entries distinguish internal and external generated conversations, policy feedback, organization summaries and synthetic model-assessment changes. Select a row for its message and model information; double-click it or use **Ga naar tijdstip** to select a retained snapshot. The CSV button exports the filtered results, not only the current page.
+- **Inspectie** displays a compact set of metrics and log counts.
+- **Relaties** compares two selected entities with a weighted descriptive distance: `0.55 × |opinion/policy difference| / 2 + 0.25 × |trust/legitimacy difference| + 0.20 × |resource difference|`. These weights are visualization choices, not estimates of causal influence. The current implementation plots all retained snapshots and displays the latest plotted point, even when an earlier traceback snapshot is selected.
+- **Model Lab** provides an individual physiological history and parameter editor; a view of instantiated formal equations and their current numerical inputs; an interactive Dutch fragment analyzer; and a rotatable 3D projection of individual opinion, stress and activation. Mouse wheel zooms diagrams; middle- or right-button dragging pans them. Click a network node to open its dashboard or dossier. In the 3D view, click an individual to select it, use **Open dashboard** to investigate it, and use the organization checkboxes to show or hide groups.
 
 The lower notebook contains the event log, thresholded state transitions, generated communication log, and anomaly list. Anomalies are rule-based flags for a large maximum change, high opinion spread, high policy gap, or a rapid increase or decrease in spread. They are descriptive alerts, not diagnostic or statistical conclusions.
 
@@ -117,20 +127,20 @@ The dossier displays the number of entries discarded for the selected organizati
 
 `language/communicatie.json` supplies topics, subordinate clauses, responses, agreement/disagreement follow-ups, transitions, and reflections. `DutchGrammar.sentence()` combines them into three-sentence synthetic messages. A local random generator is seeded from the step, sender, recipient, and state values; text generation does not consume the simulation's random stream. The choice between agreement and disagreement follow-ups uses the simulated opinion difference. Topics are generated choices, not measured facts.
 
-`DutchGrammar.parse()` and `analyze()` provide shallow token and keyword checks. They do not build a full parse tree, validate grammaticality, infer complete semantic roles, or assess CEFR level. The other JSON files contain vocabulary, descriptive features, or legacy templates; loading a file does not mean all its fields affect generation. `test_sentences.json` is example data, not an automatically executed grammar-validation corpus. See [language/README.md](language/README.md) for the data format and extension notes.
+`DutchGrammar.parse()` and `analyze()` provide shallow token and keyword checks. The separate `DutchFragment` in `dutch_formal.py` implements a bounded, lexicalized subset: declarative V2, adverb-fronting inversion, V1 questions, verb-final subordinate clauses, person/number agreement, selected transitive/intransitive/`dat`-complement frames, and nested complements up to depth 8. It also builds singular and plural noun phrases from explicitly supplied nouns and adjective forms, including the indefinite neuter singular adjective exception, and supports a restricted subject-relative clause with `die` or `dat`. Its tree is inspectable in Model Lab. The additional generated sentence in each message comes from this fragment. Failure to recognize a sentence only means it falls outside the supported fragment; neither the fragment nor the existing keyword analysis validates all Dutch, semantic plausibility, or CEFR level. The other JSON files contain vocabulary, descriptive features, or legacy templates; loading a file does not mean all its fields affect generation. `test_sentences.json` is example data, not an automatically executed grammar-validation corpus. See [language/README.md](language/README.md) for the data format and extension notes.
 
 ## Running tests
 
 Run the included model, language, and dossier tests without generating bytecode files:
 
 ```sh
-python -B -m unittest -v test_language test_dossiers
+python -B -m unittest -v test_language test_dossiers test_formal
 ```
 
 These tests cover reproducible language generation, message variety for a fixed pair, opinion-gap wording, dossier membership, episode filtering, and bounded retention. They do not establish linguistic correctness across all generated combinations, validate the model scientifically, or replace manual GUI testing.
 
 ## Research context and limitations
 
-The simulator borrows concepts such as feedback, institutional coordination, controlled Dutch text, and multiple levels of state from the referenced working paper. It does not implement a complete Dutch grammar, a physiological model, a life-course model, an empirical institutional classification pipeline, or the paper's full formal apparatus. Simulation output should be interpreted as the behavior of these particular programmed rules, not as evidence about actual individuals, organizations, clinical conditions, or causal responsibility.
+The simulator instantiates illustrative versions of the paper's observation, physiology, group feedback, effective sample size and recursive belief concepts. Its physiological and life-course values are synthetic toy states, not a validated biological model; the hypothetical belief calculation is not an observation of an agent's actual beliefs. It does not implement a complete Dutch grammar, an empirical institutional classification pipeline, or the paper's full formal apparatus. Simulation output should be interpreted as the behavior of these particular programmed rules, not as evidence about actual individuals, organizations, clinical conditions, or causal responsibility.
 
 The repository does not currently include a separate license file. The copyright notice above does not by itself grant an open-source license.

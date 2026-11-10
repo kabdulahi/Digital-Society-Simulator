@@ -14,6 +14,10 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from tkinter import ttk, filedialog
+from formal_models import Physiology, LifeCourse, SyntheticAssessment, physiology_step, observation, synthetic_assessment, group_summary, effective_sample_size, nested_belief_proxy
+from dutch_formal import DutchFragment, FragmentError
+
+FORMAL_DUTCH = DutchFragment()
 
 ORG_NAMES = ["Onderwijs", "Gezondheidszorg", "Bestuur", "Media", "Economie", "Onderzoek", "Gemeenschapsraad"]
 ORG_COLORS = ["#f59e0b", "#06b6d4", "#a78bfa", "#fb7185", "#34d399", "#60a5fa", "#eab308"]
@@ -80,7 +84,8 @@ class DutchGrammar:
             group = "followup_agree" if abs(opinion - recipient_opinion) < .15 else "followup_disagree"
         followup = rng.choice(data[group])
         reflection = rng.choice(data["reflections"])
-        return f"{subordinate[0].upper() + subordinate[1:]}, {response}. {followup}. {rng.choice(data['transitions'])} {reflection}."
+        formal_sentence = FORMAL_DUTCH.generate(rng.getrandbits(64))
+        return f"{subordinate[0].upper() + subordinate[1:]}, {response}. {followup}. {rng.choice(data['transitions'])} {reflection}. {formal_sentence}"
 
     @classmethod
     def parse(cls, sentence):
@@ -117,6 +122,9 @@ class Individual:
     resources: float
     susceptibility: float
     neighbors: list[int] = field(default_factory=list)
+    physiology: Physiology = field(default_factory=Physiology)
+    life_course: LifeCourse = field(default_factory=LifeCourse)
+    assessment: SyntheticAssessment | None = None
 
 
 @dataclass
@@ -208,6 +216,11 @@ class Society:
                                            r.uniform(.35, .95), r.uniform(.45, .9)) for i, name in enumerate(ORG_NAMES)]
         self.individuals = [Individual(i, i % 7, r.uniform(-.9, .9), r.uniform(.3, .9),
                                         r.uniform(.1, .55), r.uniform(.2, .95), r.uniform(.35, .95)) for i in range(37)]
+        for ind in self.individuals:
+            ind.life_course.age_years = float(ind.id % 19)
+            ind.physiology.baseline = .15 + .3 * ind.susceptibility
+            ind.physiology.reactivity = .25 + .5 * ind.susceptibility
+            self._update_assessment(ind, record=False)
         e = set()
         # Community structure plus cross-organization bridges; the graph is closed.
         for i in range(37):
@@ -223,6 +236,19 @@ class Society:
 
     def _event(self, kind, msg):
         self.log.append((self.global_step, self.episode, kind, msg))
+
+    def _update_assessment(self, individual, record=True):
+        key = f"assessment:{self.cfg.seed}:{self.episode}:{self.global_step}:{individual.id}"
+        raw = int.from_bytes(hashlib.sha256(key.encode("utf-8")).digest()[:8], "big")
+        error = 2 * raw / (2**64 - 1) - 1
+        previous = individual.assessment
+        individual.assessment = synthetic_assessment(individual, self.global_step, error)
+        current = individual.assessment
+        if record and previous is not None and previous.category != current.category:
+            self._dossier_entry(individual.affiliation, "Modelinschatting", "Model", f"P{individual.id:02d}",
+                "Synthetische observatie", f"Modelcategorie {previous.category} → {current.category}.",
+                f"Synthetische observatie {current.observed:.3f}; interval [{current.lower:.3f}, {current.upper:.3f}]. "
+                "Alleen een ongetoetst modelvoorbeeld; geen echte meting, diagnose of besluit.")
 
     def _dossier_entry(self, organization, kind, sender, recipient, topic, message, evidence):
         entries = self.dossiers[organization]
@@ -254,6 +280,7 @@ class Society:
         for ind in self.individuals:
             ind.opinion = clamp(ind.opinion + self.rng.uniform(-strength*.5, strength*.5))
             ind.stress = max(0, min(1, ind.stress + self.rng.uniform(-strength*.3, strength*.3)))
+            self._update_assessment(ind)
         self._event("EPISODE", f"Nieuwe omgevingscondities; schoksterkte={strength:.2f}")
 
     def step(self):
@@ -316,6 +343,10 @@ class Society:
             agreement = 1-abs(v-new_p[i.affiliation])/2
             i.trust = max(0, min(1, i.trust + c.trust_adaptation*.03*(agreement-i.trust)))
             i.stress = max(0, min(1, i.stress + .02*(abs(v-prior)*3-i.stress*.18)))
+            peer = sum(old[j] for j in i.neighbors) / len(i.neighbors) if i.neighbors else old[i.id]
+            i.physiology = physiology_step(i.physiology, i.stress, abs(old[i.id] - peer) / 2, shock)
+            i.life_course.advance()
+            self._update_assessment(i)
             if abs(v-prior) > .055:
                 self.transitions.append((self.global_step, f"P{i.id:02d}", prior, v))
         for o,v in zip(self.organizations, new_p):
@@ -370,7 +401,7 @@ class SimulatorApp(tk.Tk):
         style.configure("TFrame", background=BG)
         style.configure("TLabel", background=BG, foreground=FG)
         style.configure("TNotebook", background=BG)
-        style.configure("TNotebook.Tab", padding=(14,8))
+        style.configure("TNotebook.Tab", padding=(6,8))
         style.configure("Treeview", background=PANEL, fieldbackground=PANEL, foreground=FG, rowheight=25)
         style.configure("Treeview.Heading", background="#203047", foreground=FG)
         self.columnconfigure(0, weight=0)
@@ -388,6 +419,7 @@ class SimulatorApp(tk.Tk):
         left.rowconfigure(2,weight=0)
         left.columnconfigure(0,weight=1)
         top = ttk.Notebook(left)
+        self.top_notebook = top
         top.grid(row=0,column=0,sticky="nsew")
         network = tk.Frame(top,bg=PANEL)
         metrics = tk.Frame(top,bg=PANEL)
@@ -397,26 +429,45 @@ class SimulatorApp(tk.Tk):
         dossier_view = tk.Frame(top,bg=PANEL)
         inspect_view = tk.Frame(top,bg=PANEL)
         relation_view = tk.Frame(top,bg=PANEL)
-        top.add(network,text="  NETWERK  ")
-        top.add(metrics,text="  METRIEKEN  ")
-        top.add(states,text="  TOESTANDEN  ")
-        top.add(individuals_view,text="  INDIVIDUEN  ")
-        top.add(organizations_view,text="  ORGANISATIES  ")
-        top.add(dossier_view,text="  ORGANISATIEDOSSIERS  ")
-        top.add(inspect_view,text="  PRIMITIEVEN & LOGS  ")
-        top.add(relation_view,text="  BILATERALE RELATIES  ")
+        lab_view = tk.Frame(top,bg=PANEL)
+        self.individual_tab, self.dossier_tab = individuals_view, dossier_view
+        top.add(network,text="Netwerk")
+        top.add(metrics,text="Metrieken")
+        top.add(states,text="Toestanden")
+        top.add(individuals_view,text="Personen")
+        top.add(organizations_view,text="Organisaties")
+        top.add(dossier_view,text="Dossiers")
+        top.add(inspect_view,text="Inspectie")
+        top.add(relation_view,text="Relaties")
+        top.add(lab_view,text="Model Lab")
+        lab = ttk.Notebook(lab_view); lab.pack(fill="both", expand=True)
+        physiology_view = tk.Frame(lab,bg=PANEL)
+        formal_view = tk.Frame(lab,bg=PANEL)
+        language_view = tk.Frame(lab,bg=PANEL)
+        spatial_view = tk.Frame(lab,bg=PANEL)
+        for view,title in ((physiology_view,"Fysiologie"),(formal_view,"Formeel model"),
+                           (language_view,"Nederlandse grammatica"),(spatial_view,"3D toestandsruimte")):
+            lab.add(view,text=title)
+        self._build_physiology(physiology_view)
+        self._build_formal_view(formal_view)
+        self._build_language_view(language_view)
+        self._build_spatial_view(spatial_view)
         self.network_canvas = tk.Canvas(network,bg=PANEL,highlightthickness=0)
         self.network_canvas.pack(fill="both",expand=True)
         self.metric_canvas = tk.Canvas(metrics,bg=PANEL,highlightthickness=0)
         self.metric_canvas.pack(fill="both",expand=True)
+        self._enable_diagram_navigation(self.network_canvas)
+        self._enable_diagram_navigation(self.metric_canvas)
         nav=tk.Frame(individuals_view,bg=PANEL); nav.pack(side="left",fill="y")
         self.individual_list=tk.Listbox(nav,bg="#17263a",fg=FG,selectbackground="#31577e",width=24,relief="flat")
         self.individual_list.pack(fill="y",expand=True,padx=8,pady=8)
         self.individual_list.bind("<<ListboxSelect>>",lambda _ : self._refresh_individual_dashboard())
         self.individual_canvas=tk.Canvas(individuals_view,bg=PANEL,highlightthickness=0)
         self.individual_canvas.pack(side="left",fill="both",expand=True)
+        self._enable_diagram_navigation(self.individual_canvas)
         self.organization_canvas = tk.Canvas(organizations_view,bg=PANEL,highlightthickness=0)
         self.organization_canvas.pack(fill="both",expand=True)
+        self._enable_diagram_navigation(self.organization_canvas)
         self._build_dossier(dossier_view)
         self.inspect_tree=ttk.Treeview(inspect_view,columns=("path","value"),show="headings")
         self.inspect_tree.heading("path",text="Toestandsprimitief / logveld"); self.inspect_tree.heading("value",text="Waarde")
@@ -434,6 +485,7 @@ class SimulatorApp(tk.Tk):
         self.rel_a_combo.bind("<<ComboboxSelected>>",lambda _:self._draw_relationships())
         self.rel_b_combo.bind("<<ComboboxSelected>>",lambda _:self._draw_relationships())
         self.relationship_canvas=tk.Canvas(relation_view,bg=PANEL,highlightthickness=0); self.relationship_canvas.pack(fill="both",expand=True)
+        self._enable_diagram_navigation(self.relationship_canvas)
         columns=("id","org","opinion","trust","stress","resources")
         self.state_tree=ttk.Treeview(states,columns=columns,show="headings")
         for k,label,width in zip(columns,["Actor","Organisatie","Opinie","Vertrouwen","Stress","Middelen"],[75,190,105,110,100,110]):
@@ -657,6 +709,7 @@ class SimulatorApp(tk.Tk):
         self._refresh_individual_dashboard()
         self._refresh_relation_choices(individuals, organizations)
         self._refresh_dossier()
+        self._refresh_lab()
         self.inspect_tree.delete(*self.inspect_tree.get_children())
         primitive=[("time.step",step),("time.episode",episode),("population.individuals",len(individuals)),("population.organizations",len(organizations)),
                    ("metrics.history_length",len(history)),("metrics.last_mean",history[-1][1] if history else "—"),
@@ -683,6 +736,192 @@ class SimulatorApp(tk.Tk):
         widget.see("end")
         widget.configure(state="disabled")
 
+    def _enable_diagram_navigation(self, canvas):
+        canvas._zoom_factor = 1.0
+        canvas.configure(scrollregion=(-4000, -4000, 8000, 8000))
+        def zoom(event):
+            direction = 1 if getattr(event, "delta", 0) > 0 or getattr(event, "num", 0) == 4 else -1
+            old = canvas._zoom_factor
+            canvas._zoom_factor = max(.4, min(4.0, old * (1.12 if direction > 0 else 1 / 1.12)))
+            canvas.scale("all", canvas.canvasx(event.x), canvas.canvasy(event.y), canvas._zoom_factor / old, canvas._zoom_factor / old)
+            return "break"
+        canvas.bind("<MouseWheel>", zoom)
+        canvas.bind("<Button-4>", zoom); canvas.bind("<Button-5>", zoom)
+        canvas.bind("<ButtonPress-2>", lambda e: canvas.scan_mark(e.x, e.y))
+        canvas.bind("<B2-Motion>", lambda e: canvas.scan_dragto(e.x, e.y, gain=1))
+        canvas.bind("<ButtonPress-3>", lambda e: canvas.scan_mark(e.x, e.y))
+        canvas.bind("<B3-Motion>", lambda e: canvas.scan_dragto(e.x, e.y, gain=1))
+
+    def _apply_diagram_zoom(self, canvas):
+        scale = getattr(canvas, "_zoom_factor", 1.0)
+        if scale != 1.0:
+            canvas.scale("all", max(1,canvas.winfo_width()) / 2, max(1,canvas.winfo_height()) / 2, scale, scale)
+
+    def _open_individual(self, index):
+        self.individual_list.selection_clear(0, "end")
+        self.individual_list.selection_set(index); self.individual_list.see(index)
+        self.phys_person.set(f"P{index:02d}")
+        self._load_physiology_parameters()
+        self.top_notebook.select(self.individual_tab)
+        self._refresh_individual_dashboard()
+
+    def _open_organization(self, index):
+        self.dossier_org.set(ORG_NAMES[index]); self.dossier_page = 0
+        self.top_notebook.select(self.dossier_tab); self._refresh_dossier()
+
+    def _build_physiology(self, parent):
+        toolbar = tk.Frame(parent,bg=PANEL); toolbar.pack(fill="x",padx=8,pady=4)
+        tk.Label(toolbar,text="Persoon",bg=PANEL,fg=FG).pack(side="left")
+        self.phys_person = tk.StringVar(value="P00")
+        combo = ttk.Combobox(toolbar,textvariable=self.phys_person,state="readonly",width=7,
+                             values=[f"P{i:02d}" for i in range(37)])
+        combo.pack(side="left",padx=5); combo.bind("<<ComboboxSelected>>",lambda e:self._load_physiology_parameters())
+        tk.Label(toolbar,text="Dimensieloos, synthetisch · geen klinische metingen",bg=PANEL,fg=MUTED).pack(side="left",padx=8)
+        self.phys_values = {}
+        sliders = tk.Frame(parent,bg=PANEL); sliders.pack(fill="x")
+        for key,label,maximum in (("baseline","Basisniveau",1),("reactivity","Reactiviteit",1),("regulation","Regulatie",1),("sleep_support","Herstelondersteuning",1),("observation_uncertainty","Observatie-onzekerheid",.25)):
+            var = tk.DoubleVar(value=getattr(Physiology(),key)); self.phys_values[key] = var
+            group = tk.Frame(sliders,bg=PANEL); group.pack(side="left",fill="x",expand=True,padx=4)
+            tk.Label(group,text=label,bg=PANEL,fg=MUTED).pack(anchor="w")
+            tk.Scale(group,from_=0,to=maximum,resolution=.01,orient="horizontal",variable=var,bg=PANEL,fg=FG,highlightthickness=0).pack(fill="x")
+        actions=tk.Frame(parent,bg=PANEL); actions.pack(fill="x",padx=8)
+        tk.Button(actions,text="Laad geselecteerd",command=self._load_physiology_parameters).pack(side="left")
+        tk.Button(actions,text="Pas toe op actuele toestand",command=self._apply_physiology_parameters).pack(side="left",padx=6)
+        self.phys_status = tk.Label(actions,text="",bg=PANEL,fg=MUTED); self.phys_status.pack(side="left",padx=6)
+        self.phys_canvas = tk.Canvas(parent,bg=PANEL,highlightthickness=0); self.phys_canvas.pack(fill="both",expand=True)
+        self._enable_diagram_navigation(self.phys_canvas)
+
+    def _load_physiology_parameters(self):
+        ind=self._selected_snapshot()[2][int(self.phys_person.get()[1:])]
+        for key,var in self.phys_values.items(): var.set(getattr(ind.physiology,key))
+        self._refresh_lab()
+
+    def _apply_physiology_parameters(self):
+        if self.running or (getattr(self,"trace_index",-1) >= 0 and self.trace_index != len(self.sim.snapshots)-1):
+            self.phys_status.config(text="Pauzeer en selecteer de nieuwste snapshot.",fg="#fb7185"); return
+        ind=self.sim.individuals[int(self.phys_person.get()[1:])]
+        for key,var in self.phys_values.items(): setattr(ind.physiology,key,var.get())
+        self.sim._update_assessment(ind)
+        self.sim._event("FYSIO",f"P{ind.id:02d}: fysiologische parameters gewijzigd")
+        self.sim._capture_snapshot(); self.trace_index=-1
+        self.phys_status.config(text="Toegepast op actuele toestand",fg="#34d399"); self._refresh()
+
+    def _build_formal_view(self, parent):
+        self.formal_text = tk.Text(parent,bg=PANEL,fg=FG,wrap="word",font=("Consolas",10),relief="flat")
+        self.formal_text.pack(fill="both",expand=True,padx=10,pady=10)
+
+    def _build_language_view(self, parent):
+        bar=tk.Frame(parent,bg=PANEL); bar.pack(fill="x",padx=10,pady=8)
+        self.grammar_input=tk.StringVar(value="Vandaag leest de student het boek.")
+        entry=tk.Entry(bar,textvariable=self.grammar_input); entry.pack(side="left",fill="x",expand=True)
+        tk.Button(bar,text="Analyseer",command=self._analyze_formal_sentence).pack(side="left",padx=5)
+        entry.bind("<Return>",lambda e:self._analyze_formal_sentence())
+        tk.Label(parent,text="Beperkt lexicon: V2, inversie, vragen, overeenkomst, dat-recursie en werkwoordfinale bijzinnen.",bg=PANEL,fg=MUTED).pack(anchor="w",padx=10)
+        self.grammar_tree=ttk.Treeview(parent,columns=("value",),show="tree headings")
+        self.grammar_tree.heading("#0",text="Constituent / kenmerk"); self.grammar_tree.heading("value",text="Waarde")
+        self.grammar_tree.pack(fill="both",expand=True,padx=10,pady=8)
+        self._analyze_formal_sentence()
+
+    def _analyze_formal_sentence(self):
+        self.grammar_tree.delete(*self.grammar_tree.get_children())
+        try: tree=FORMAL_DUTCH.parse(self.grammar_input.get())
+        except FragmentError as exc:
+            self.grammar_tree.insert("","end",text="Buiten ondersteund fragment",values=(str(exc),)); return
+        def add(parent, obj):
+            for key,value in obj.items():
+                if isinstance(value,dict):
+                    child=self.grammar_tree.insert(parent,"end",text=key,open=True); add(child,value)
+                else: self.grammar_tree.insert(parent,"end",text=key,values=(value,))
+        add("",tree)
+
+    def _build_spatial_view(self, parent):
+        bar=tk.Frame(parent,bg=PANEL); bar.pack(fill="x",padx=8)
+        self.spatial_angle=tk.DoubleVar(value=35)
+        self.spatial_selected=None
+        tk.Label(bar,text="Rotatie",bg=PANEL,fg=FG).pack(side="left")
+        tk.Scale(bar,from_=-180,to=180,orient="horizontal",variable=self.spatial_angle,command=lambda _:self._draw_spatial(),bg=PANEL,fg=FG,highlightthickness=0,length=200).pack(side="left")
+        tk.Label(bar,text="X opinie · Y stress · Z activatie | klik: selecteer",bg=PANEL,fg=MUTED).pack(side="left",padx=8)
+        tk.Button(bar,text="Open dashboard",command=lambda:self._open_individual(self.spatial_selected) if self.spatial_selected is not None else None).pack(side="right")
+        filters=tk.Frame(parent,bg=PANEL); filters.pack(fill="x",padx=8)
+        self.spatial_orgs=[]
+        for index,name in enumerate(ORG_NAMES):
+            var=tk.BooleanVar(value=True); self.spatial_orgs.append(var)
+            tk.Checkbutton(filters,text=name,variable=var,command=self._draw_spatial,bg=PANEL,
+                           fg=ORG_COLORS[index],selectcolor="#243850",activebackground=PANEL).pack(side="left")
+        self.spatial_info=tk.Label(parent,text="Selecteer een knoop · wiel: zoom · rechts slepen: verplaats",bg=PANEL,fg=MUTED,anchor="w")
+        self.spatial_info.pack(fill="x",padx=8)
+        self.spatial_canvas=tk.Canvas(parent,bg=PANEL,highlightthickness=0); self.spatial_canvas.pack(fill="both",expand=True)
+        self._enable_diagram_navigation(self.spatial_canvas)
+        self.spatial_canvas.bind("<Configure>",lambda e:self._draw_spatial())
+
+    def _draw_spatial(self):
+        if not hasattr(self,"spatial_canvas"): return
+        c=self.spatial_canvas; c.delete("all"); snap=self._selected_snapshot()
+        w=max(400,c.winfo_width()); h=max(250,c.winfo_height()); angle=math.radians(self.spatial_angle.get())
+        def project(x,y,z):
+            rx=x*math.cos(angle)-y*math.sin(angle); ry=x*math.sin(angle)+y*math.cos(angle)
+            return w/2+rx*min(w,h)*.34, h*.57-ry*min(w,h)*.16-z*min(w,h)*.32
+        origin=project(0,0,0)
+        for axis,end,color in (("opinie",(1,0,0),"#60a5fa"),("stress",(0,1,0),"#fb7185"),("activatie",(0,0,1),"#34d399")):
+            x,y=project(*end); c.create_line(*origin,x,y,fill=color,width=2,arrow="last"); c.create_text(x,y,text=axis,fill=color,anchor="sw")
+        for i in snap[2]:
+            if not self.spatial_orgs[i.affiliation].get(): continue
+            x,y=project(i.opinion, i.stress, i.physiology.activation)
+            tag=f"spatial_{i.id}"; selected=i.id==self.spatial_selected; radius=9 if selected else 6
+            c.create_oval(x-radius,y-radius,x+radius,y+radius,fill=ORG_COLORS[i.affiliation],outline="#ffffff" if selected else FG,width=3 if selected else 1,tags=(tag,))
+            if selected: c.create_text(x+10,y-10,text=f"P{i.id:02d}",anchor="w",fill=FG,tags=(tag,))
+            c.tag_bind(tag,"<Button-1>",lambda e,index=i.id:self._select_spatial(index))
+            c.tag_bind(tag,"<Double-Button-1>",lambda e,index=i.id:self._open_individual(index))
+        c.create_text(10,15,anchor="w",text=f"Synthetische toestand · t={snap[0]} · E{snap[1]}",fill=FG)
+        if self.spatial_selected is not None:
+            ind=snap[2][self.spatial_selected]
+            self.spatial_info.config(text=f"P{ind.id:02d} · {ORG_NAMES[ind.affiliation]} · opinie {ind.opinion:+.3f} · stress {ind.stress:.3f} · activatie {ind.physiology.activation:.3f} · modelobservatie {ind.assessment.observed:.3f}")
+        self._apply_diagram_zoom(c)
+
+    def _select_spatial(self, index):
+        self.spatial_selected=index
+        self.phys_person.set(f"P{index:02d}")
+        self._load_physiology_parameters()
+
+    def _refresh_lab(self):
+        if not hasattr(self,"phys_canvas"): return
+        step,episode,individuals,orgs,_=self._selected_snapshot()
+        index=int(self.phys_person.get()[1:]); ind=individuals[index]; p=ind.physiology
+        c=self.phys_canvas; c.delete("all"); w=max(450,c.winfo_width()); h=max(160,c.winfo_height())
+        c.create_text(15,18,anchor="w",text=f"P{index:02d} t={step}: activatie {p.activation:.3f} · vermoeidheid {p.fatigue:.3f} · herstel {p.recovery:.3f} · leeftijd {ind.life_course.age_years:.1f}",fill=FG)
+        visible=list(self.sim.snapshots); end=next((n for n,s in enumerate(visible) if s is self._selected_snapshot()),len(visible)-1)
+        series=visible[:end+1]; left,right,top,bottom=45,w-20,45,h-35
+        c.create_rectangle(left,top,right,bottom,outline="#34445a")
+        for field,color in (("activation","#60a5fa"),("fatigue","#fb7185"),("recovery","#34d399")):
+            points=[]
+            for n,snap in enumerate(series):
+                value=getattr(snap[2][index].physiology,field)
+                points.extend((left+(right-left)*n/max(1,len(series)-1),bottom-(bottom-top)*value))
+            if len(points)>=4: c.create_line(*points,fill=color,width=2)
+        c.create_text(left,bottom+16,anchor="w",text=f"t={series[0][0]} → t={step}  |  blauw activatie · rood vermoeidheid · groen herstel",fill=MUTED)
+        self._apply_diagram_zoom(c)
+        org=orgs[ind.affiliation]; members=[i for i in individuals if i.affiliation==ind.affiliation]
+        group=group_summary(members,org); n=len(members); neff=effective_sample_size(n,.75)
+        self._update_text(self.formal_text,[
+            f"FORMEEL MODEL · P{index:02d} · {org.name} · t={step} / E{episode}",
+            "(1) Observatie y = 0.5 stress + 0.3 activatie + 0.2 vermoeidheid",
+            f"    y = {observation(ind):.4f}; synthetische proxy, geen meting of diagnose.",
+            f"(2) Ruisobservatie={ind.assessment.observed:.4f}; interval [{ind.assessment.lower:.4f}, {ind.assessment.upper:.4f}]; modelcategorie={ind.assessment.category}.",
+            "    De categorie gebruikt alleen de synthetische proxy; dit is geen gevalideerde inschatting of besluit.",
+            "(3) Cognitie x: de simulator werkt opinie, vertrouwen en stress bij via sociale/institutionele input.",
+            f"    opinie={ind.opinion:+.4f}, vertrouwen={ind.trust:.4f}, stress={ind.stress:.4f}",
+            "(4) p(t+1) = Fp(t) + Gx(t) + Je(t): begrensd model met stress, sociaal verschil en schok.",
+            f"    activatie={p.activation:.4f}, vermoeidheid={p.fatigue:.4f}, herstel={p.recovery:.4f}",
+            f"    basis={p.baseline:.2f}, reactiviteit={p.reactivity:.2f}, regulatie={p.regulation:.2f}, slaapsteun={p.sleep_support:.2f}",
+            f"Levensloop: {ind.life_course.age_years:.2f} synthetische jaren · {ind.life_course.stage}; één stap = één aangenomen dag.",
+            f"Recursieve overtuiging (hypothese, diepte 2): {nested_belief_proxy(ind.opinion, group['mean_opinion'], 2):+.4f}; geen geobserveerde overtuiging.",
+            "(6,9) Groep en organisatie: gemiddelde ledenopinie voedt beleidsupdate.",
+            f"    q: opinie={group['mean_opinion']:+.4f}, stress={group['mean_stress']:.4f}, y={group['mean_observation']:.4f}; beleid={group['policy']:+.4f}",
+            f"(7) Effectieve steekproef n/(1+(n−1)ρ): n={n}, voorbeeld ρ=0.75 → {neff:.3f} (aanname, geen gemeten correlatie).",
+            "(5,8,10–12) Probabilistische taalproductie, normatieve kosten en interventies zijn niet empirisch geïmplementeerd.",
+            "Alle waarden zijn illustratief en niet gevalideerd; geen gevolgtrekkingen over echte personen."])
+        self._draw_spatial()
+
     def _build_dossier(self, parent):
         self.dossier_page = 0
         self.dossier_records = []
@@ -696,7 +935,7 @@ class SimulatorApp(tk.Tk):
         org.pack(side="left", padx=3); org.bind("<<ComboboxSelected>>", self._dossier_filter_changed)
         tk.Button(bar, text="▶", command=lambda: self._dossier_change_org(1)).pack(side="left")
         kind = ttk.Combobox(bar, textvariable=self.dossier_kind, state="readonly", width=20,
-                            values=("Alles", "Intern gesprek", "Extern gesprek", "Terugkoppeling", "Organisatiebericht"))
+                            values=("Alles", "Intern gesprek", "Extern gesprek", "Terugkoppeling", "Organisatiebericht", "Modelinschatting"))
         kind.pack(side="left", padx=8); kind.bind("<<ComboboxSelected>>", self._dossier_filter_changed)
         tk.Label(bar, text="Persoon (P00)", bg=PANEL, fg=FG).pack(side="left")
         member = tk.Entry(bar, textvariable=self.dossier_member, width=7); member.pack(side="left", padx=4)
@@ -717,7 +956,7 @@ class SimulatorApp(tk.Tk):
         self.dossier_tree.configure(yscrollcommand=scroll.set); scroll.pack(side="right", fill="y")
         self.dossier_tree.pack(side="left", fill="both", expand=True)
         for tag, color in (("Intern gesprek", "#b4efcf"), ("Extern gesprek", "#b7d7ff"),
-                           ("Terugkoppeling", "#ffd18a"), ("Organisatiebericht", "#d8c5ff")):
+                           ("Terugkoppeling", "#ffd18a"), ("Organisatiebericht", "#d8c5ff"), ("Modelinschatting", "#ffe599")):
             self.dossier_tree.tag_configure(tag, foreground=color)
         self.dossier_tree.bind("<<TreeviewSelect>>", self._dossier_show_detail)
         self.dossier_tree.bind("<Double-1>", self._dossier_jump)
@@ -816,13 +1055,18 @@ class SimulatorApp(tk.Tk):
         for i,(x,y) in zip(individuals,pos):
             r=4+2*i.trust
             color=ORG_COLORS[i.affiliation]
-            c.create_oval(x-r,y-r,x+r,y+r,fill=color,outline="")
+            tag=f"person_{i.id}"
+            c.create_oval(x-r,y-r,x+r,y+r,fill=color,outline="",activeoutline="white",activewidth=2,tags=(tag,))
+            c.tag_bind(tag,"<Button-1>",lambda e,index=i.id:self._open_individual(index))
         for o,(x,y) in zip(organizations,orgpos):
-            c.create_oval(x-19,y-19,x+19,y+19,fill=ORG_COLORS[o.id],outline="#ffffff",width=1)
-            c.create_text(x,y,text=str(o.id+1),fill="#09111f",font=("Segoe UI",11,"bold"))
+            tag=f"org_{o.id}"
+            c.create_oval(x-19,y-19,x+19,y+19,fill=ORG_COLORS[o.id],outline="#ffffff",width=1,tags=(tag,))
+            c.create_text(x,y,text=str(o.id+1),fill="#09111f",font=("Segoe UI",11,"bold"),tags=(tag,))
+            c.tag_bind(tag,"<Button-1>",lambda e,index=o.id:self._open_organization(index))
             c.create_text(x,y+31,text=f"{o.name}  {o.policy:+.2f}",fill=FG,font=("Segoe UI",9))
         c.create_text(16,18,anchor="w",text="● ORGANISATIES (GROOT)  ·  INDIVIDUEN (KLEIN)  ·  VERBINDINGEN (LIJNEN)",fill=MUTED,font=("Segoe UI",9))
-        c.create_text(16,h-18,anchor="w",text="Kleur = organisatie; getal bij organisatie = beleidstoestand; alle verbindingen blijven binnen de gemeenschap.",fill=MUTED,font=("Segoe UI",9))
+        c.create_text(16,h-18,anchor="w",text="Klik een knoop · wiel: zoom · rechts/midden slepen: verplaats · kleur: organisatie",fill=MUTED,font=("Segoe UI",9))
+        self._apply_diagram_zoom(c)
 
     def _refresh_relation_choices(self, individuals=None, organizations=None):
         if individuals is None:
@@ -873,6 +1117,7 @@ class SimulatorApp(tk.Tk):
         c.create_text(x0+pw,y0+ph+20,anchor="e",text=f"t={points[-1][0]}",fill=MUTED)
         c.create_text(x0,y0+ph+48,anchor="w",text=f"afstand={current[1]:.3f}  opinie={current[2]:.3f}  vertrouwen/legitimiteit={current[3]:.3f}  middelen={current[4]:.3f}",fill=FG,font=("Consolas",10))
         c.create_text(x0,y0+ph+72,anchor="w",text="Attributie: 55% opinie · 25% vertrouwen/legitimiteit · 20% middelen",fill=MUTED,font=("Segoe UI",9))
+        self._apply_diagram_zoom(c)
 
     def _draw_individuals(self, individuals, step):
         c=self.individual_canvas; c.delete("all")
@@ -901,6 +1146,7 @@ class SimulatorApp(tk.Tk):
         logs=[x for x in self.sim.communication_log if x[0] <= step and x[2] == f"P{i.id:02d}"][-8:]
         for n,(_,_,src,dst,topic,message) in enumerate(logs):
             c.create_text(30,340+n*34,anchor="w",text=f"→ {dst} · {topic}: {message}",fill="#b9d6f0",font=("Consolas",8),width=max(400,c.winfo_width()-60))
+        self._apply_diagram_zoom(c)
 
     def _draw_organizations(self, organizations, step):
         c=self.organization_canvas; c.delete("all")
@@ -916,6 +1162,7 @@ class SimulatorApp(tk.Tk):
                 c.create_rectangle(x,y+1,x+90,y+9,outline="#34445a")
                 c.create_rectangle(x,y+1,x+90*(value-lo)/(hi-lo),y+9,fill=ORG_COLORS[o.id],outline="")
                 c.create_text(x+94,y+5,anchor="w",text=f"{value:.2f}",fill=FG,font=("Consolas",8))
+        self._apply_diagram_zoom(c)
 
     def _draw_metrics(self, history=None, selected_step=0):
         c=self.metric_canvas;c.delete("all")
@@ -941,6 +1188,7 @@ class SimulatorApp(tk.Tk):
                 xpos=x0+(selected-hist[0][0])/(hist[-1][0]-hist[0][0])*pw
                 c.create_line(xpos,y0,xpos,y0+ph,fill="#dbeafe",dash=(3,3))
             c.create_text(x0+pw/2,y0+ph+15,text=f"t={hist[-1][0]}",anchor="center",fill=MUTED,font=("Consolas",8))
+        self._apply_diagram_zoom(c)
 
     def export_csv(self):
         path=filedialog.asksaveasfilename(defaultextension=".csv",initialfile="society_metrics.csv",filetypes=[("CSV","*.csv")])
